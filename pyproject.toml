@@ -1,0 +1,52 @@
+[project]
+name = "mlp-kprop"
+version = "0.1.0"
+description = "Cumulant propagation for MLPs"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "blobfile>=3.1.0",
+    "einops>=0.8.1",
+    "ipykernel>=6.30.1",
+    "ipython>=9.5.0",
+    "ipywidgets>=8.1.7",
+    "jaxtyping>=0.3.2",
+    "joblib>=1.5.3",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.6",
+    "mpi4py>=4.1.1",
+    "numpy>=2.3.3",
+    "pandas>=2.3.3",
+    "pyinstrument>=5.1.1",
+    "pytest>=8.4.2",
+    "quimb>=1.11.2",
+    "scipy>=1.16.2",
+    "tabulate>=0.9.0",
+    "torch[opt-einsum]>=2.8.0",
+    "tqdm>=4.67.1",
+]
+
+[project.optional-dependencies]
+# treewidth requires SageMath, which can be installed using something like:
+# conda install -c conda-forge sage
+treewidth = []
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "C4", "N", "UP", "SIM"]
+
+[tool.ruff.format]
+skip-magic-trailing-comma = true
