@@ -1,6 +1,6 @@
 # Cumulant propagation for wide random MLPs
 
-This repo contains code for the paper "Estimating the expected output of wide random MLPs more efficiently than sampling.", including:
+This repo contains code for the paper "[Estimating the expected output of wide random MLPs more efficiently than sampling.](https://arxiv.org/abs/2605.05179)", including:
 - Implementation of the cumulant propagation ("kprop") algorithm in `src/mlp_kprop`
 - Scripts for running experiments and plotting in `scripts/`
 
