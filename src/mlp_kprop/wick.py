@@ -153,6 +153,9 @@ def poly_wick_coef(
     """
     mean = torch.as_tensor(mean)
     var = torch.as_tensor(var)
+    if (var < 1e-10).any():
+        logger.warning("Snapping negative variance to zero")
+        var = torch.clamp(var, min=1e-10)
     dk_p = (poly**p).deriv(k)
     sigma = var.sqrt()
     alpha = mean / sigma
@@ -175,6 +178,9 @@ def hermgauss_wick_coef(
     If float64=True, cast to float64 for the computation, then cast back.
     """
     mean, var = torch.as_tensor(mean), torch.as_tensor(var)
+    if (var < 1e-10).any():
+        logger.warning("Snapping negative variance to zero")
+        var = torch.clamp(var, min=1e-10)
     orig_dtype = mean.dtype
     if float64:
         mean, var = mean.double(), var.double()
