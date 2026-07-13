@@ -1,0 +1,26 @@
+{
+  "run_name": "max_endpoint_depthsweep",
+  "widths": [128, 256, 512],
+  "network_seeds": [0, 1, 2, 3],
+  "num_layers": 4,
+  "nonlin": "relu",
+  "base_seed": 0,
+  "quadrature_nodes": 400,
+  "quadrature_convergence_factor": 2,
+  "check_dense_vs_factorized_max_n": 16,
+  "reference": {
+    "backend": "spherical",
+    "validate_backend": true,
+    "target_se": 3e-05,
+    "min_samples": 4000000,
+    "max_samples": 400000000,
+    "batch_size": 262144,
+    "gaussian_var_samples": 4000000
+  },
+  "mc_validation": {
+    "enabled": false,
+    "widths": [],
+    "repeats": 32,
+    "samples": 16384
+  }
+}
