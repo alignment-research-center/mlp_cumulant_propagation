@@ -1,0 +1,22 @@
+{
+  "run_name": "argmax_endpoint_smoke",
+  "widths": [16, 32],
+  "network_seeds": [0, 1],
+  "num_layers": 4,
+  "nonlin": "relu",
+  "base_seed": 0,
+  "quadrature_nodes": 128,
+  "quadrature_convergence_factor": 2,
+  "check_dense_vs_factorized_max_n": 32,
+  "evaluation": {
+    "num_blocks": 8,
+    "samples_per_block": 4096,
+    "batch_size": 262144
+  },
+  "mc_validation": {
+    "enabled": true,
+    "widths": [16],
+    "repeats": 32,
+    "samples": 8192
+  }
+}

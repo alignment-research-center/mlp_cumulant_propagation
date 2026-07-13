@@ -26,3 +26,9 @@ from mlp_kprop.max_endpoint.hermite_endpoint import (  # noqa: F401
     hermite_he,
 )
 from mlp_kprop.max_endpoint.estimator import max_endpoint_estimate  # noqa: F401
+from mlp_kprop.max_endpoint.argmax import (  # noqa: F401
+    argmax_endpoint_estimate,
+    product_gaussian_argmax,
+    product_gaussian_argmax_reference,
+    project_to_simplex,
+)

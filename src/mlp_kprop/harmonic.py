@@ -302,8 +302,16 @@ def rad(
         )
     )
 
-@cache
 def proj_coef(n: int, d: int, r: int) -> Float[Tensor, "k"]:
+    """Dtype-aware wrapper around _proj_coef_impl: the coefficient tensor is
+    built with the *current* default dtype, so the cache must key on it
+    (otherwise a test or script that flips torch.set_default_dtype poisons
+    the cache for every later caller)."""
+    return _proj_coef_impl(n, d, r, torch.get_default_dtype())
+
+
+@cache
+def _proj_coef_impl(n: int, d: int, r: int, dtype: torch.dtype) -> Float[Tensor, "k"]:
     """
     Returns the coefficients vector [a_0, a_1, ..., a_{floor(d/2)}] such that
     projection onto the space R^r H_{d-2r}^n is given by
@@ -332,7 +340,8 @@ def proj_coef(n: int, d: int, r: int) -> Float[Tensor, "k"]:
         [
             (-1) ** r * (c - r) / 4 ** j / math.factorial(r) / math.factorial(j - r) / c / math.prod([1 - c + m for m in range(j)])
             for j in range(r, d // 2 + 1)
-        ]
+        ],
+        dtype=dtype,
     )
 
 def _multigraph_coef(graph: list[tuple[tuple[int, int], int]], aritys: list[int], lap_coef: bool = True) -> float:
@@ -515,7 +524,7 @@ def contract_W_proj(
     R = partial(rad, n=n_out, strict=strict)
     for r, coef in enumerate(P):
         if r < r_out:
-            assert torch.allclose(coef, torch.tensor(0.)), "Coefficient should be zero."
+            assert torch.allclose(coef, torch.zeros_like(coef)), "Coefficient should be zero."
             continue
         ret = ret + coef * compose([R] * (r - r_out))(
             _lap_m_prod(r, factors, strict=strict)
@@ -543,7 +552,7 @@ def proj_geq_r(A: Float[Tensor, '*n'], n: int, r_out: int, strict=False) -> HTen
         ret = torch.tensor(0.0, device=A.device, dtype=A.dtype)
         for r, coef in enumerate(P):
             if r < r_out:
-                assert torch.allclose(coef, torch.tensor(0.)), "Coefficient should be zero."
+                assert torch.allclose(coef, torch.zeros_like(coef)), "Coefficient should be zero."
                 continue
             ret = ret + coef * compose([R] * (r - r_out) + [L] * r)(A)
     return HTensor(ret, r=r_out, n=n, strict=strict)
@@ -616,7 +625,7 @@ def DS_harmonic_proj(
         for part, dslice in A.slices.items():
             for r, coef in enumerate(P):
                 if r < r_out:
-                    assert torch.allclose(coef, torch.tensor(0.)), "Coefficient should be zero."
+                    assert torch.allclose(coef, torch.zeros_like(coef)), "Coefficient should be zero."
                     continue
                 ret = ret + coef * compose([R] * (r - r_out))(
                     _lap_m_dslice(r, dslice, part)

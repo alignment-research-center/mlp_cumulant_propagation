@@ -13,6 +13,7 @@ CODE_ROOT_REMOTE = "~/code"
 # Exclude .venv (macOS binaries), .git, and local data/plots.
 CODE_RELPATHS = [
     f"{REPO_RELPATH}/pyproject.toml",
+    f"{REPO_RELPATH}/.python-version",
     f"{REPO_RELPATH}/uv.lock",
     f"{REPO_RELPATH}/README.md",
     f"{REPO_RELPATH}/UPSTREAM_COMMIT",

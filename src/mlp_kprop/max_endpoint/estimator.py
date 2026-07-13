@@ -184,11 +184,14 @@ def _nested_estimates(
     estimates = {"E0_product_gaussian": psi}
     equivalences: dict[str, str] = {}
     status: list[str] = []
+    # NOTE: `running = running + x` (not +=) so this also works elementwise on
+    # tensors without in-place aliasing (reused by max_endpoint.argmax on the
+    # per-term mu-gradients).
     running = psi
     if "C2" in corrections:
-        running += corrections["C2"]
+        running = running + corrections["C2"]
         estimates["E1_cov1"] = running
-        running += corrections["C2sq_half"]
+        running = running + corrections["C2sq_half"]
         estimates["E2_cov2"] = running
     else:
         # k_max=1: off-diagonal covariance identically zero in the tracked
@@ -197,12 +200,12 @@ def _nested_estimates(
         equivalences["E2_cov2"] = "E0_product_gaussian"
         status.append("cov_offdiag_unavailable")
     if "C3" in corrections and "C2" in corrections:
-        running += corrections["C3"]
+        running = running + corrections["C3"]
         estimates["E2_k3"] = running
     elif "C3" not in corrections:
         status.append("k3_unavailable")
     if "C4_trace" in corrections and "C3" in corrections and "C2" in corrections:
-        running += corrections["C4_trace"]
+        running = running + corrections["C4_trace"]
         estimates["E2_full"] = running
     elif "C4_trace" not in corrections:
         status.append("k4_trace_unavailable")
