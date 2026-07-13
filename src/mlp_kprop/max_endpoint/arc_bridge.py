@@ -76,6 +76,11 @@ def extract_gaussian_params(K: dict[int, Any], dtype: torch.dtype = torch.float6
     K1 = K[1]
     assert K1.r == 0, "K[1] must have radial index 0"
     mu = K1.core.detach().to(dtype)
+    if not torch.isfinite(mu).all():
+        raise ValueError(
+            "kprop_nonfinite: kprop mean contains non-finite entries "
+            "(the truncated cumulant expansion diverges at this width/depth)."
+        )
     K2 = K[2]
     if K2.r == 0:
         var = K2.core.detach().to(dtype).diagonal().clone()
@@ -85,6 +90,11 @@ def extract_gaussian_params(K: dict[int, Any], dtype: torch.dtype = torch.float6
         var = (K2.core.detach().to(dtype) * mvec).clone()
     else:
         raise ValueError(f"Unsupported K[2] radial index {K2.r}")
+    if not torch.isfinite(var).all():
+        raise ValueError(
+            "kprop_nonfinite: kprop variances contain non-finite entries "
+            "(the truncated cumulant expansion diverges at this width/depth)."
+        )
     bad = int((var <= 0).sum())
     if bad > 0:
         status.append(f"negative_variance_clamped:{bad}")

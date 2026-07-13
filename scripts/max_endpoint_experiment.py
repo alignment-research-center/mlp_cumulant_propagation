@@ -360,14 +360,24 @@ def dense_check_task(cfg: ExperimentCfg, width: int, net_seed: int, device: torc
         return json.loads(path.read_text())
     mlp = build_mlp(cfg, width, net_seed, device)
     k_in = {1: torch.zeros(width, device=device), 2: torch.eye(width, device=device)}
-    K = mlp_kprop(mlp, k_in, k_max=3, kind=Kind.AUGMENT, factor=True, use_avg_metric=cfg.use_avg_metric)
-    res_fac = max_endpoint_estimate(K, device=device)
-    K_dense = dict(K)
-    K_dense[3] = HTensor(K[3].to_tensor().to(torch.float64), r=0)
-    K_dense[4] = HTensor(K[4].to_tensor().to(torch.float64), r=0)
-    res_dense = max_endpoint_estimate(
-        K_dense, device=device, dense_max_n=cfg.check_dense_vs_factorized_max_n
-    )
+    try:
+        K = mlp_kprop(mlp, k_in, k_max=3, kind=Kind.AUGMENT, factor=True, use_avg_metric=cfg.use_avg_metric)
+        res_fac = max_endpoint_estimate(K, device=device)
+        K_dense = dict(K)
+        K_dense[3] = HTensor(K[3].to_tensor().to(torch.float64), r=0)
+        K_dense[4] = HTensor(K[4].to_tensor().to(torch.float64), r=0)
+        res_dense = max_endpoint_estimate(
+            K_dense, device=device, dense_max_n=cfg.check_dense_vs_factorized_max_n
+        )
+    except Exception as e:
+        # e.g. the truncated expansion is divergent at this width/depth; the
+        # dense-vs-factorized comparison is then undefined, not failed.
+        payload = {
+            "width": width, "net_seed": net_seed, "max_rel_diff": None,
+            "passed": None, "status": f"{type(e).__name__}: {e}",
+        }
+        atomic_write_json(path, payload)
+        return payload
     max_rel = 0.0
     for name in res_fac.corrections:
         a, b = res_fac.corrections[name], res_dense.corrections[name]
@@ -496,37 +506,48 @@ def run_experiment(cfg: ExperimentCfg) -> Path:
     pairs = [(w, s) for w in sorted(cfg.widths, reverse=True) for s in cfg.network_seeds]
     my_pairs = [p for i, p in enumerate(pairs) if i % size == rank]
 
-    for width, seed in my_pairs:
-        t0 = time.time()
-        ref = reference_task(cfg, width, seed, device, out)
-        logger.info(
-            f"[w{width} s{seed}] ref={ref['ref_mean']:.6f} "
-            f"(A-B={ref['ref_diff']:.2e}, se={ref['ref_a']['se']:.2e}, "
-            f"samples={ref['ref_a']['num_samples']})"
-        )
-        for variant in cfg.kprop_variants:
-            rows = kprop_task(cfg, width, seed, variant, ref, device, out)
-            for r in rows:
-                if r.get("status") == "failed":
-                    logger.error(f"[w{width} s{seed} {variant['name']}] FAILED: {r['warning']}")
-                    break
-            else:
-                best = rows[-1]
-                logger.info(
-                    f"[w{width} s{seed} {variant['name']}] {best['estimator_name']}="
-                    f"{best['estimate']:.6f} err={best['signed_error_against_ref_mean']:.2e} "
-                    f"flops={best['flops_total']:.3g}"
-                )
-        if width <= cfg.check_dense_vs_factorized_max_n:
-            chk = dense_check_task(cfg, width, seed, device, out)
-            logger.info(f"[w{width} s{seed}] dense-vs-factorized rel diff {chk['max_rel_diff']:.2e} passed={chk['passed']}")
-        if cfg.mc_validation.enabled and width in tuple(cfg.mc_validation.widths):
-            v = mc_validation_task(cfg, width, seed, device, out)
-            logger.info(f"[w{width} s{seed}] MC validation ratio {v['ratio']:.3f}")
-        logger.info(f"[w{width} s{seed}] done in {time.time() - t0:.1f}s")
-
-    if rank == 0:
-        merge_results(cfg, out)
+    try:
+        for width, seed in my_pairs:
+            t0 = time.time()
+            ref = reference_task(cfg, width, seed, device, out)
+            logger.info(
+                f"[w{width} s{seed}] ref={ref['ref_mean']:.6f} "
+                f"(A-B={ref['ref_diff']:.2e}, se={ref['ref_a']['se']:.2e}, "
+                f"samples={ref['ref_a']['num_samples']})"
+            )
+            for variant in cfg.kprop_variants:
+                rows = kprop_task(cfg, width, seed, variant, ref, device, out)
+                for r in rows:
+                    if r.get("status") == "failed":
+                        logger.error(f"[w{width} s{seed} {variant['name']}] FAILED: {r['warning']}")
+                        break
+                else:
+                    best = rows[-1]
+                    logger.info(
+                        f"[w{width} s{seed} {variant['name']}] {best['estimator_name']}="
+                        f"{best['estimate']:.6f} err={best['signed_error_against_ref_mean']:.2e} "
+                        f"flops={best['flops_total']:.3g}"
+                    )
+            if width <= cfg.check_dense_vs_factorized_max_n:
+                chk = dense_check_task(cfg, width, seed, device, out)
+                if chk.get("max_rel_diff") is None:
+                    logger.warning(f"[w{width} s{seed}] dense-vs-factorized skipped: {chk.get('status')}")
+                else:
+                    logger.info(
+                        f"[w{width} s{seed}] dense-vs-factorized rel diff "
+                        f"{chk['max_rel_diff']:.2e} passed={chk['passed']}"
+                    )
+            if cfg.mc_validation.enabled and width in tuple(cfg.mc_validation.widths):
+                try:
+                    v = mc_validation_task(cfg, width, seed, device, out)
+                    logger.info(f"[w{width} s{seed}] MC validation ratio {v['ratio']:.3f}")
+                except Exception:
+                    logger.exception(f"[w{width} s{seed}] MC validation failed")
+            logger.info(f"[w{width} s{seed}] done in {time.time() - t0:.1f}s")
+    finally:
+        # Always merge whatever per-task checkpoints exist, even on a crash.
+        if rank == 0:
+            merge_results(cfg, out)
     return out
 
 
