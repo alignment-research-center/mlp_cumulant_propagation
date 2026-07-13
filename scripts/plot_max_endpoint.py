@@ -158,7 +158,11 @@ def plot_mse_vs_width(agg: pd.DataFrame, df: pd.DataFrame, results_dir: Path) ->
     for method, g in agg.groupby("method"):
         g = g.sort_values("width")
         color = g["color"].iloc[0]
-        res = g[g["resolved"] & (g["mse"] > 0)]
+        # Fit only the convergent regime: above the noise floor AND below an
+        # absolute sanity bound (T is O(1)-scale; the truncated expansion
+        # diverges to astronomically large MSE at small width/deep nets, and
+        # those points must not enter the power-law fit).
+        res = g[g["resolved"] & (g["mse"] > 0) & (g["mse"] < 1.0)]
         label = method
         if len(res) >= 3:
             slope = _fit_slope(res["width"].to_numpy(float), res["mse"].to_numpy(float))
