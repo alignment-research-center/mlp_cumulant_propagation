@@ -42,6 +42,10 @@ RUN_ROOT_BLOB = f"gs://arc-ml/{os.environ['USER']}/run"
 RUN_RELPATH_FORMAT = "{package}/{date}/{run_name}"
 RUN_ENV = f"""
 export PATH="/usr/mpi/gcc/openmpi-4.1.5rc2/bin:$PATH"
+export LD_LIBRARY_PATH="/usr/mpi/gcc/openmpi-4.1.5rc2/lib:$LD_LIBRARY_PATH"
+# OpenBLAS thread oversubscription makes numpy eigensolves pathologically slow
+# on this box; the heavy lifting is on the GPU anyway.
+export OPENBLAS_NUM_THREADS=4
 cd ~/code/{REPO_RELPATH}
 source .venv/bin/activate
 """
