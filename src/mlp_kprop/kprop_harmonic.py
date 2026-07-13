@@ -3,7 +3,7 @@ import math
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Iterable
 from functools import partial
-from typing import Optional
+from typing import Any, Optional, cast
 from enum import Enum
 
 import torch
@@ -32,7 +32,7 @@ OLD, SIMPLE, AUGMENT, BASE = Kind.OLD, Kind.SIMPLE, Kind.AUGMENT, Kind.BASE
 
 
 @cache
-def get_int_cond(k_max: int):
+def get_int_cond(k_max: int) -> IntPartCond:
     def int_cond(int_part: IntPartition) -> bool:
         return sum(math.ceil(x / 2) for x in int_part) <= k_max
 
@@ -40,7 +40,7 @@ def get_int_cond(k_max: int):
 
 
 @cache
-def get_vec_cond(k_max: int):
+def get_vec_cond(k_max: int) -> VecPartCond:
     def vec_cond(vec_part: VecPartition) -> bool:
         return (
             sum(max(sum(math.ceil(v[i] / 2) for i in range(len(v))) - 1, 1) for v in vec_part)
@@ -121,6 +121,60 @@ def multiply_wicks(
         K_part = K_part * wick_coef.reshape(view_shape)
     return K_part
 
+def _gaussian_raw_moment(
+    mean: Float[Tensor, "n"],
+    var: Float[Tensor, "n"],
+    degree: int,
+) -> Float[Tensor, "n"]:
+    if degree == 0:
+        return torch.ones_like(mean)
+    moments = [torch.ones_like(mean), mean]
+    for current_degree in range(2, degree + 1):
+        moments.append(mean * moments[-1] + (current_degree - 1) * var * moments[-2])
+    return moments[degree]
+
+def shifted_identity_wick_coef(
+    mean: Float[Tensor, "n"],
+    var: Float[Tensor, "n"],
+    k: int,
+    p: int = 1,
+) -> Float[Tensor, "n"]:
+    """
+    Wick coefficient for ``f(z) = z + shift`` with shifted mean supplied.
+
+    The caller passes the post-shift mean as ``mean``. This gives
+    ``E[∂^k f(Z)^p] = (p)_k E[f(Z)^(p-k)]`` and preserves all cumulants
+    above degree one while allowing the mean to be changed.
+    """
+    if k > p:
+        return torch.zeros_like(mean)
+    falling = math.prod(range(p - k + 1, p + 1))
+    return falling * _gaussian_raw_moment(mean, var, p - k)
+
+def small_variance_relu_wick_coef(
+    mean: Float[Tensor, "n"],
+    var: Float[Tensor, "n"],
+    k: int,
+    p: int = 1,
+    *,
+    threshold: float,
+) -> Float[Tensor, "n"]:
+    """
+    Use a shifted-identity surrogate for ReLU on tiny-variance coordinates.
+
+    Coordinates with ``var <= threshold`` are propagated as
+    ``z -> z + (ReLU(mean) - mean)``. This applies ReLU to their means but
+    keeps higher cumulants unchanged. Other coordinates use the usual ReLU
+    Wick coefficients.
+    """
+    relu_coef = relu_wick_coef(mean, var, k=k, p=p)
+    small_var = var <= threshold
+    if not torch.any(small_var):
+        return relu_coef
+    shifted_mean = torch.relu(mean)
+    identity_coef = shifted_identity_wick_coef(shifted_mean, var, k=k, p=p)
+    return torch.where(small_var, identity_coef, relu_coef)
+
 @cache
 def mean_field_var(layer: int) -> float:
     '''
@@ -128,7 +182,7 @@ def mean_field_var(layer: int) -> float:
     Hardcoded for ReLU only. Unused.
     '''
     @cache
-    def s(l):
+    def s(l: int) -> float:
         if l == 0:
             return 0.
         prev = s(l-1)
@@ -174,7 +228,7 @@ def get_r_x(d: int, k_max: int, kind: Kind = SIMPLE) -> int:
         raise ValueError(f"Unknown kind: {kind}")
 
 
-def get_d_max(k_max, kind: Kind) -> int:
+def get_d_max(k_max: int, kind: Kind) -> int:
     '''
     Returns the maximum cumulant degree tracked given budget parameter k_max and kind.
     '''
@@ -256,12 +310,13 @@ def linear_kprop(
 
 def nonlin_kprop(
     K_in: HTower,
-    nonlin_wick_coef: Callable[[float, float, int, int], float],
+    nonlin_wick_coef: Callable[..., Float[Tensor, "n"]],
     k_max: int,
     kind: Kind = SIMPLE,
     use_pK: bool = True,
     factor: bool = False,
-) -> HTower:
+    relu_small_var_threshold: Optional[float] = None,
+) -> Any:
     """
     Propagate cumulants through nonlinearity.
     We first compute power cumulants via Wick expansion around a Gaussian with matching mean and variance
@@ -274,6 +329,9 @@ def nonlin_kprop(
         nonlin_wick_coef: 1d Wick coefficients wrt a Gaussian. (mean, var, k, p) -> E_{Z~N(mean,var)}[∂^k nonlin(Z)^p]
         factor: Use a factorized representation for the top-degree cumulant.
             Only supported for k_max=3 or 4.
+        relu_small_var_threshold: If not None, use the small-variance ReLU
+            shifted-identity approximation on coordinates with variance below
+            this threshold.
 
     Returns:
         K_out: Output cumulants (with identity metric)
@@ -285,6 +343,12 @@ def nonlin_kprop(
 
     n = K_in[1].n
 
+    if relu_small_var_threshold is not None:
+        # The factored k=3/k=4 paths compute their own Wick lookups. Falling
+        # back keeps this opt-in stabilizer exact with respect to the
+        # unfactored implementation.
+        factor = False
+
     if factor:
         if k_max > 4:
             raise NotImplementedError("Factored nonlin_kprop only implemented for k_max=3 or 4")
@@ -292,8 +356,8 @@ def nonlin_kprop(
         if k_max == 3:
             from mlp_kprop.factor_k3 import factored_nonlin_kprop_k3
             return factored_nonlin_kprop_k3(
-                K_in=K_in,
-                nonlin_wick_coef=nonlin_wick_coef,
+                K_in=cast(Any, K_in),
+                nonlin_wick_coef=cast(Any, nonlin_wick_coef),
                 augment=(kind==AUGMENT),
                 base=(kind==BASE),
                 use_pK=use_pK,
@@ -301,8 +365,8 @@ def nonlin_kprop(
         elif k_max == 4:
             from mlp_kprop.factor_k4 import factored_nonlin_kprop_k4
             return factored_nonlin_kprop_k4(
-                K_in=K_in,
-                nonlin_wick_coef=nonlin_wick_coef,
+                K_in=cast(Any, K_in),
+                nonlin_wick_coef=cast(Any, nonlin_wick_coef),
                 augment=(kind==AUGMENT),
                 base=(kind==BASE),
                 use_pK=use_pK,
@@ -331,6 +395,14 @@ def nonlin_kprop(
     @cache
     @flop_name('get_wick_coef')
     def get_wick_coef(k: int, p: int) -> Float[Tensor, "n"]:
+        if relu_small_var_threshold is not None:
+            return small_variance_relu_wick_coef(
+                mean=mean,
+                var=var,
+                k=k,
+                p=p,
+                threshold=relu_small_var_threshold,
+            )
         return nonlin_wick_coef(mean=mean, var=var, k=k, p=p)
 
     # 2. Compute pK
@@ -341,7 +413,7 @@ def nonlin_kprop(
         for vec_part, count in vec_part_dict.items()
         if all(p==1 for p in int_part) or use_pK   # If not use_pK, only need (1, ..., 1) int_parts since we're not going to zero the diagonal
     ]
-    pK_slices = defaultdict(lambda: 0.0)
+    pK_slices: dict[IntPartition, Float[Tensor, "*n"]] = {}
     for int_part, vec_part, count in tqdm(
         terms_iso,
         disable=logger.getEffectiveLevel() > logging.INFO,
@@ -351,12 +423,13 @@ def nonlin_kprop(
             term = eval_part(K_in, vec_part, len(int_part), output_zero_repeated=use_pK)
             if term is None:
                 continue
-            pK_slices[int_part] += count * multiply_wicks(
+            contribution = count * multiply_wicks(
                 term,
                 check_vec_partition(vec_part, len(int_part)),  # check_vec_partition returns sum of partition vectors
                 p=int_part,
                 wick_lookup=get_wick_coef,
             )
+            pK_slices[int_part] = pK_slices.get(int_part, torch.zeros_like(contribution)) + contribution
     # Since we sum over iso classes * count instead of all terms, each slice is not symmetric wrt its int_part
     # So we symmetrize here
     with flop_name(f'symmetrize'):
@@ -386,9 +459,19 @@ def nonlin_kprop(
         K_out[d] = DS_harmonic_proj(K_d_ds, r_x)
     return K_out
 
-def relu_kprop(K_in: HTower, k_max: int, kind: Kind=SIMPLE) -> HTower:
+def relu_kprop(
+    K_in: HTower,
+    k_max: int,
+    kind: Kind=SIMPLE,
+    *,
+    small_var_threshold: Optional[float] = None,
+) -> HTower:
     return nonlin_kprop(
-        K_in, nonlin_wick_coef=relu_wick_coef, k_max=k_max, kind=kind
+        K_in,
+        nonlin_wick_coef=relu_wick_coef,
+        k_max=k_max,
+        kind=kind,
+        relu_small_var_threshold=small_var_threshold,
     )
 
 def poly_kprop(
@@ -438,6 +521,8 @@ def mlp_kprop(
     use_pK: bool = True,
     up_to_layer: Optional[str] = None,
     output_d_max: Optional[int] = None,
+    relu_small_var_identity: bool = False,
+    relu_small_var_threshold_scale: float = 1.0,
 ) -> HTower | dict[str, HTower]:
     """
     Cumulant propagation through MLP layers.
@@ -463,6 +548,11 @@ def mlp_kprop(
             Takes a string f'pre{l}' or f'act{l}', interpreted as going up to the preactivation
             or activation labeled l, respectively. None means go through all layers.
         output_d_max: Max cumulant degree to output
+        relu_small_var_identity: For ReLU layers, approximate coordinates with
+            variance ``<= n**(-k_max)`` by applying ReLU to the mean and
+            preserving higher cumulants.
+        relu_small_var_threshold_scale: Multiplicative factor for the
+            small-variance threshold.
 
     Returns:
         K_out: Dictionary mapping cumulant order d to cumulant tensor of shape (num_layers, n, ..., n)
@@ -472,12 +562,16 @@ def mlp_kprop(
         raise NotImplementedError("mlp_kprop currently does not support layernorm")
 
     nonlin_by_layer = mlp.nonlin_names
-    nonlin_wick_coef_by_layer = [WICK_COEF_D[nonlin] for nonlin in nonlin_by_layer]
+    nonlin_wick_coef_by_layer = [
+        cast(Callable[..., Float[Tensor, "n"]], WICK_COEF_D[nonlin])
+        for nonlin in nonlin_by_layer
+    ]
     init_scale_by_layer = mlp.init_scale
 
     K = coerce_input(K_in, k_max=k_max, kind=kind)
     K_by_layer = OrderedDict()
-    for l, W_module in enumerate(mlp.Ws):
+    for l, W_module_raw in enumerate(mlp.Ws):
+        W_module = cast(torch.nn.Linear, W_module_raw)
         W = W_module.weight
         layer_bias = W_module.bias
         if up_to_layer == f'pre{l}' or (l == len(mlp.nonlins) and up_to_layer is None):
@@ -487,7 +581,11 @@ def mlp_kprop(
                 K_by_layer[f"pre{l}"] = clone_tower(K, d_max=output_d_max)
             break
         if l < len(mlp.nonlins):
-            metric = init_scale_by_layer[l] if use_avg_metric else None
+            metric = (
+                torch.full((W.shape[0],), float(init_scale_by_layer[l]), device=W.device, dtype=W.dtype)
+                if use_avg_metric
+                else None
+            )
             K = linear_kprop(
                 K, W, k_max=k_max,
                 set_metric=metric,
@@ -502,6 +600,11 @@ def mlp_kprop(
                 kind=kind,
                 use_pK=use_pK,
                 factor=factor,
+                relu_small_var_threshold=(
+                    relu_small_var_threshold_scale * mlp.input_dim ** (-k_max)
+                    if relu_small_var_identity and nonlin_by_layer[l] == "relu"
+                    else None
+                ),
             )
             if output_all:
                 K_by_layer[f"act{l}"] = clone_tower(K, d_max=output_d_max)
