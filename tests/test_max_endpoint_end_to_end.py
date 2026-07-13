@@ -15,6 +15,7 @@ from mlp_kprop.max_endpoint.ground_truth import (
 from mlp_kprop.mlp import MLP
 
 torch.set_grad_enabled(False)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def _tower_from_dense(mu, sigma2, k3=None, k4=None):
@@ -84,11 +85,12 @@ def test_synthetic_skewed_independent():
         k4[i, i, i, i] = k4d[i]
 
     # Ground truth by large Monte Carlo.
-    z = torch.randn(30_000_000, n, dtype=torch.float64)
-    y = a * z + c * (z**2 - 1)
+    z = torch.randn(30_000_000, n, dtype=torch.float64, device=DEVICE)
+    y = a.to(DEVICE) * z + c.to(DEVICE) * (z**2 - 1)
     m = y.max(dim=1).values
     truth = m.mean().item()
     se = m.std().item() / math.sqrt(m.numel())
+    del z, y
 
     res = max_endpoint_estimate(_tower_from_dense(mu, torch.diag(var), k3, k4))
     err_cov = abs(res.estimates["E2_cov2"] - truth)
@@ -106,7 +108,7 @@ def test_small_mlp_estimators_vs_reference():
     reference-sigmas of the truth and beat the product-Gaussian baseline."""
     torch.manual_seed(3)
     n = 16
-    mlp = MLP(input_dim=n, hidden_dim=n, output_dim=n, num_layers=4)
+    mlp = MLP(input_dim=n, hidden_dim=n, output_dim=n, num_layers=4).to(DEVICE)
     ref = reference_estimate(
         mlp,
         seed=1000,
@@ -115,9 +117,15 @@ def test_small_mlp_estimators_vs_reference():
         min_samples=2_000_000,
         max_samples=30_000_000,
         batch_size=1_000_000,
-        device=torch.device("cpu"),
+        device=DEVICE,
     )
-    K = mlp_kprop(mlp, {1: torch.zeros(n), 2: torch.eye(n)}, k_max=3, kind=Kind.AUGMENT, factor=True)
+    K = mlp_kprop(
+        mlp,
+        {1: torch.zeros(n, device=DEVICE), 2: torch.eye(n, device=DEVICE)},
+        k_max=3,
+        kind=Kind.AUGMENT,
+        factor=True,
+    )
     res = max_endpoint_estimate(K)
     err0 = abs(res.estimates["E0_product_gaussian"] - ref.mean)
     err_full = abs(res.estimates["E2_full"] - ref.mean)
@@ -131,10 +139,10 @@ def test_spherical_reference_matches_gaussian():
     Gaussian-input reference for a bias-free ReLU network, at lower variance."""
     torch.manual_seed(5)
     n = 12
-    mlp = MLP(input_dim=n, hidden_dim=n, output_dim=n, num_layers=3)
+    mlp = MLP(input_dim=n, hidden_dim=n, output_dim=n, num_layers=3).to(DEVICE)
     assert not mlp.has_bias()
     kw = dict(min_samples=2_000_000, max_samples=2_000_000, batch_size=500_000,
-              target_se=0.0, device=torch.device("cpu"))
+              target_se=0.0, device=DEVICE)
     g = reference_estimate(mlp, seed=1, backend="gaussian", **kw)
     s = reference_estimate(mlp, seed=2, backend="spherical", **kw)
     tol = 4 * math.sqrt(g.se**2 + s.se**2)
@@ -164,7 +172,7 @@ def test_positive_homogeneity():
 
 def test_expected_chi_norm():
     for n in (1, 2, 10, 500):
-        x = torch.randn(2_000_000, n)
+        x = torch.randn(2_000_000, n, device=DEVICE)
         emp = x.norm(dim=1).mean().item()
         assert abs(expected_chi_norm(n) - emp) < 5e-3 * expected_chi_norm(n)
 

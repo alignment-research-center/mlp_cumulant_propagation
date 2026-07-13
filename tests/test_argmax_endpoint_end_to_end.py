@@ -16,6 +16,7 @@ from mlp_kprop.max_endpoint.argmax_mse import (
 from mlp_kprop.mlp import MLP
 
 torch.set_grad_enabled(False)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 @pytest.fixture
@@ -35,11 +36,15 @@ def test_small_mlp_end_to_end(n, float32_default):
     mlp = MLP(input_dim=n, hidden_dim=n, output_dim=n, num_layers=4)
     assert not mlp.has_bias()
     m = 2_000_000
-    counts = winner_counts(mlp, num_samples=m, seed=123, device=torch.device("cpu"))
+    counts = winner_counts(mlp.to(DEVICE), num_samples=m, seed=123, device=DEVICE).cpu()
     q_emp = counts.double() / m
 
     K = mlp_kprop(
-        mlp, {1: torch.zeros(n), 2: torch.eye(n)}, k_max=3, kind=Kind.AUGMENT, factor=True
+        mlp,
+        {1: torch.zeros(n, device=DEVICE), 2: torch.eye(n, device=DEVICE)},
+        k_max=3,
+        kind=Kind.AUGMENT,
+        factor=True,
     )
     res = argmax_endpoint_estimate(K)
     # Precondition for the accuracy/sum checks: a healthy tower. Towers with
