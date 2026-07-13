@@ -54,7 +54,8 @@ def test_small_mlp_end_to_end(n, float32_default):
     assert res.num_clamped_var == 0, res.status
 
     mc_se = math.sqrt(0.25 / m)  # per-coordinate MC uncertainty bound
-    for name, q in res.q_raw.items():
+    for name, q_dev in res.q_raw.items():
+        q = q_dev.cpu()
         # Raw estimates: finite, sum to one, close to the empirical winners.
         assert torch.isfinite(q).all(), name
         assert abs(float(q.sum()) - 1.0) < 1e-9, f"{name}: sum {float(q.sum())}"
@@ -65,7 +66,7 @@ def test_small_mlp_end_to_end(n, float32_default):
         # O(1/m) collision-bias correction and MC noise.
         assert abs(u - direct) < 200 * mc_se**2 * n + 5e-6, f"{name}: {u} vs {direct}"
         # Projection returns a valid probability vector near the raw one.
-        p = res.q_projected[name]
+        p = res.q_projected[name].cpu()
         assert abs(float(p.sum()) - 1.0) < 1e-12
         assert float(p.min()) >= 0.0
         # At tiny widths the truncated expansion can go moderately negative;
@@ -76,7 +77,7 @@ def test_small_mlp_end_to_end(n, float32_default):
     # distribution is highly concentrated (strongly correlated outputs) and
     # the truncated expansion has genuinely large error — that width scaling
     # is exactly what the experiment measures. Bound it loosely per width.
-    err_full = float((res.q_raw["E2_full"] - q_emp).norm())
+    err_full = float((res.q_raw["E2_full"].cpu() - q_emp).norm())
     assert err_full < {8: 0.7, 16: 0.3}[n], f"E2_full l2 error {err_full}"
 
     # Diagnostics populated.
