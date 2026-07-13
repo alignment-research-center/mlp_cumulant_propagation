@@ -1,0 +1,26 @@
+{
+  "run_name": "max_endpoint_full_relu_depth16",
+  "widths": [16, 23, 32, 45, 64, 91, 128, 181, 256, 362, 512],
+  "network_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+  "num_layers": 16,
+  "nonlin": "relu",
+  "base_seed": 0,
+  "quadrature_nodes": 400,
+  "quadrature_convergence_factor": 2,
+  "check_dense_vs_factorized_max_n": 16,
+  "reference": {
+    "backend": "spherical",
+    "validate_backend": true,
+    "target_se": 3e-5,
+    "min_samples": 4000000,
+    "max_samples": 400000000,
+    "batch_size": 262144,
+    "gaussian_var_samples": 4000000
+  },
+  "mc_validation": {
+    "enabled": true,
+    "widths": [16, 64],
+    "repeats": 32,
+    "samples": 16384
+  }
+}

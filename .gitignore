@@ -5,3 +5,5 @@ __pycache__
 nohup_*
 .codex
 .claude
+.DS_Store
+data/
