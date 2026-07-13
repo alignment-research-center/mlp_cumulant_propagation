@@ -131,3 +131,15 @@ JSON per (width, seed, variant) task under `tasks/` (fully resumable), merged
 Seeds: `sha256(base_seed:width:net_seed:purpose)` for purposes
 net/refA/refB/gauss_var/mcval. If `OMPI_COMM_WORLD_SIZE > 1`, (width, seed)
 pairs are sharded across ranks, one CUDA device per rank.
+
+## Known limitation: small-width divergence at depth 16
+
+At `num_layers=16` and small widths (n <= 32, sometimes n=45-64 depending on
+seed), the k_max=3 truncated cumulant expansion genuinely diverges: in float64
+the propagated mean reaches ~1e16 and variances ~-1e33; in float32 (the
+production dtype) the tower overflows to NaN. This is a property of the
+truncated expansion (upstream's own MSE curves blow up at small width for
+k_max >= 3 at this depth), not of the endpoint pipeline. Affected
+(width, seed, variant) rows are recorded with status `failed` and a
+`kprop_nonfinite` explanation, and are excluded from fits; k_max <= 2 variants
+remain available at those widths.
