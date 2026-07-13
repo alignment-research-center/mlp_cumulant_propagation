@@ -125,11 +125,18 @@ def derive_seed(base_seed: int, width: int, net_seed: int, purpose: str) -> int:
 
 def git_commit() -> str:
     try:
-        return subprocess.run(
+        out = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True
         ).stdout.strip()
+        if out:
+            return out
     except Exception:
-        return "unknown"
+        pass
+    # Remote copies are rsynced without .git; a GIT_COMMIT file is shipped instead.
+    marker = REPO_ROOT / "GIT_COMMIT"
+    if marker.exists():
+        return marker.read_text().strip()
+    return "unknown"
 
 
 def upstream_commit() -> str:
