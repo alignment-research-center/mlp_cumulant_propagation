@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from functools import cache
 
 import numpy as np
 import torch
@@ -65,11 +66,22 @@ class QuadratureCfg:
     dtype: torch.dtype = field(default=torch.float64)
 
 
+@cache
+def _leggauss_reference(q: int) -> tuple[np.ndarray, np.ndarray]:
+    """Raw Gauss-Legendre nodes/weights on [-1, 1], cached per node count.
+
+    numpy's leggauss solves a q x q symmetric eigenproblem; on some BLAS
+    builds (thread-oversubscribed OpenBLAS) this takes minutes, so it must
+    only ever run once per q per process.
+    """
+    return np.polynomial.legendre.leggauss(q)
+
+
 def gauss_legendre_nodes(
     q: int, lo: float, hi: float, device: torch.device, dtype: torch.dtype
 ) -> tuple[Tensor, Tensor]:
     """Gauss-Legendre nodes/weights mapped from [-1, 1] to [lo, hi]."""
-    x, w = np.polynomial.legendre.leggauss(q)
+    x, w = _leggauss_reference(q)
     t = torch.as_tensor(0.5 * (hi - lo) * (x + 1.0) + lo, device=device, dtype=dtype)
     w = torch.as_tensor(0.5 * (hi - lo) * w, device=device, dtype=dtype)
     return t, w
