@@ -53,8 +53,13 @@ def _gauss_moment_poly(k: int) -> Polynomial:
     """
     alpha = Polynomial([0, 1])
     return sum(
-        math.comb(k, 2 * j) * math.prod(range(1, 2 * j, 2)) * alpha ** (k - 2 * j)
-        for j in range(k // 2 + 1)
+        (
+            math.comb(k, 2 * j)
+            * math.prod(range(1, 2 * j, 2))
+            * alpha ** (k - 2 * j)
+            for j in range(k // 2 + 1)
+        ),
+        start=Polynomial([0]),
     )
 
 
@@ -123,21 +128,22 @@ def relu_wick_coef(mean: Float[Tensor, "n"], var: Float[Tensor, "n"], k: int, p:
         else:
             return (-1) ** (k - 2) * sigma ** (-(k - 1)) * He(k - 2, alpha) * norm_pdf(alpha)
 
-def sgn_wick_coef(mean: Float[Tensor, 'n'], var: Float[Tensor, 'n'], k: int, p: int = 1) -> float:
+def sgn_wick_coef(mean: Float[Tensor, 'n'], var: Float[Tensor, 'n'], k: int, p: int = 1) -> Float[Tensor, "n"]:
     """
     Computes E[∂^k sgn(Z)^p] for Z ~ N(mean, var).
     For odd p, sgn^p = sgn. For even p, sgn^p = 1 (a.e.).
     """
+    mean = torch.as_tensor(mean)
     if p % 2 == 0:
         # sgn(z)^{2m} = 1 a.e., so E[∂^k 1] = 1 if k=0, else 0.
-        return torch.as_tensor(1.0 if k == 0 else 0.0)
+        return torch.full_like(mean, 1.0 if k == 0 else 0.0)
     # Use that sgn = 2*∂ReLU - 1
     if k == 0:
         return 2 * relu_wick_coef(mean, var, 1) - 1
     else:
         return 2 * relu_wick_coef(mean, var, k + 1)
 
-def heaviside_wick_coef(mean: Float[Tensor, 'n'], var: Float[Tensor, 'n'], k: int, p: int = 1) -> float:
+def heaviside_wick_coef(mean: Float[Tensor, 'n'], var: Float[Tensor, 'n'], k: int, p: int = 1) -> Float[Tensor, "n"]:
     """
     Computes E[∂^k 1[Z>0]^p] for Z ~ N(mean, var).
     Of course, output does not depend on p since 1^p=1.
@@ -147,18 +153,17 @@ def heaviside_wick_coef(mean: Float[Tensor, 'n'], var: Float[Tensor, 'n'], k: in
 
 def poly_wick_coef(
     poly: Polynomial, mean: Float[Tensor, "n"], var: Float[Tensor, "n"], k: int, p: int = 1
-) -> float:
+) -> Float[Tensor, "n"]:
     """
     Returns E[∂^k poly(Z)^p] for Z ~ N(mean, var) and poly a numpy Polynomial.
     """
     mean = torch.as_tensor(mean)
     var = torch.as_tensor(var)
     dk_p = (poly**p).deriv(k)
-    sigma = var.sqrt()
-    alpha = mean / sigma
-    return sum(
-        c * eval_poly(_gauss_moment_poly(i), alpha) * sigma**i for i, c in enumerate(dk_p.coef)
-    )
+    moments = [torch.ones_like(mean), mean]
+    for degree in range(2, len(dk_p.coef)):
+        moments.append(mean * moments[-1] + (degree - 1) * var * moments[-2])
+    return sum((c * moments[i] for i, c in enumerate(dk_p.coef)), start=torch.zeros_like(mean))
 
 def hermgauss_wick_coef(
     f: Callable,

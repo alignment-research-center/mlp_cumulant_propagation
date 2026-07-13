@@ -196,7 +196,7 @@ def DS_pK_to_K(pK: DSTower, strict=True) -> DSTower:
     Does the pK -> K conversion directly.
     
     Composing the pK -> M and M -> K formulae yields:
-        pK[X_{i_1},...,X_{i_d}] = sum_{rho} (prod_{B in rho} pK[X_{i_B}]) * (sum_{tau\geq rho; sigma ∧ tau <= rho} mu(tau, 1))
+        pK[X_{i_1},...,X_{i_d}] = sum_{rho} (prod_{B in rho} pK[X_{i_B}]) * (sum_{tau >= rho; sigma ∧ tau <= rho} mu(tau, 1))
     where sigma is the type of the partition (i_1, ..., i_d), and mu is the Moebius function on the partition lattice.
     """
     return DS_part_sum(pK, _pK_to_K_coef, strict=strict)
