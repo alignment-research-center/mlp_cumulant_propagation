@@ -97,6 +97,11 @@ def project_to_simplex(q: Tensor) -> Tensor:
     renormalized.
     """
     assert q.ndim == 1
+    if not torch.isfinite(q).all():
+        # Projection of a non-finite vector is undefined; propagate NaN so the
+        # caller's diagnostics flag it rather than crashing (deep narrow towers
+        # can produce non-finite raw estimates; recorded, never hidden).
+        return torch.full_like(q, float("nan"))
     n = q.shape[0]
     s, _ = torch.sort(q, descending=True)
     cssv = torch.cumsum(s, dim=0) - 1.0

@@ -46,6 +46,10 @@ export LD_LIBRARY_PATH="/usr/mpi/gcc/openmpi-4.1.5rc2/lib:$LD_LIBRARY_PATH"
 # OpenBLAS thread oversubscription makes numpy eigensolves pathologically slow
 # on this box; the heavy lifting is on the GPU anyway.
 export OPENBLAS_NUM_THREADS=4
+# denvr calgary image (kunalc-2): default OpenMPI transports fail MPI_Init;
+# force the plain TCP stack (harmless elsewhere).
+export OMPI_MCA_btl=tcp,self
+export OMPI_MCA_pml=ob1
 cd ~/code/{REPO_RELPATH}
 source .venv/bin/activate
 """

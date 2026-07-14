@@ -153,6 +153,19 @@ def test_permutation_equivariance():
         assert float((res_p.q_raw[name] - res.q_raw[name][perm]).abs().max()) < 1e-11, name
 
 
+def test_simplex_projection_nonfinite_input():
+    """Deep narrow towers can produce non-finite raw estimates; the projection
+    must propagate NaN (flagged downstream) instead of crashing (regression:
+    depth-6 pilot, w16, 15 clamped variances -> NaN q -> nonzero().max() on
+    an empty tensor)."""
+    q = torch.tensor([0.5, float("nan"), 0.3], dtype=torch.float64)
+    p = project_to_simplex(q)
+    assert p.shape == q.shape
+    assert torch.isnan(p).all()
+    q_inf = torch.tensor([0.5, float("inf"), 0.3], dtype=torch.float64)
+    assert torch.isnan(project_to_simplex(q_inf)).all()
+
+
 def test_simplex_projection():
     q = torch.tensor([0.5, -0.1, 0.4, 0.2], dtype=torch.float64)
     p = project_to_simplex(q)
