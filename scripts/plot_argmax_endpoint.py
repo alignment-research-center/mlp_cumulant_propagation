@@ -204,8 +204,17 @@ def plot_mse_vs_flops(agg, results_dir, per_coordinate=False):
     fig, ax = plt.subplots(figsize=(7, 5))
     y, lo, hi = ("mse_pc", "ci_lo_pc", "ci_hi_pc") if per_coordinate else ("mse", "ci_lo", "ci_hi")
     for method, g in agg.groupby("method"):
+        # Label with the two separate width exponents (MSE ~ n^c at F ~ n^b);
+        # a combined MSE ~ F^a law is NOT expected (both are power laws in n,
+        # and the FLOP exponent changes regime, e.g. kprop's n^3 term).
+        res = g[g["resolved"] & (g[y] > 0)]
+        label = method
+        if len(res) >= 3:
+            c = _fit_slope(res["width"].to_numpy(float), res[y].to_numpy(float))
+            b = _fit_slope(res["width"].to_numpy(float), res["flops_total"].to_numpy(float))
+            label = f"{method} (MSE~$n^{{{c:.2f}}}$ at F~$n^{{{b:.2f}}}$)"
         _plot_points(ax, g.sort_values("flops_total"), "flops_total", y, lo, hi,
-                     method, g["color"].iloc[0], _ls(g["projection"].iloc[0]),
+                     label, g["color"].iloc[0], _ls(g["projection"].iloc[0]),
                      annotate_width=True)
     _mc_curves(ax, agg, per_coordinate)
     ax.set_xscale("log"); ax.set_yscale("log")
