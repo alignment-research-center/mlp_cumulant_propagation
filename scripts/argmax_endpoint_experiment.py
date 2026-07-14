@@ -115,6 +115,7 @@ class ArgmaxExperimentCfg:
     def from_json(path: str | Path, **overrides) -> "ArgmaxExperimentCfg":
         raw = json.loads(Path(path).read_text())
         raw.update(overrides)
+        raw.pop("depths", None)  # consumed by the pilot/full wrappers (one run per depth)
         ev = EvaluationCfg(**raw.pop("evaluation", {}))
         mcv = MCValidationCfg(**raw.pop("mc_validation", {}))
         raw["widths"] = tuple(raw.get("widths", (16, 32)))

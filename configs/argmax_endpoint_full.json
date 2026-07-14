@@ -1,8 +1,9 @@
 {
-  "run_name": "argmax_endpoint_full_relu_depth16",
+  "run_name": "argmax_endpoint_full_relu",
+  "depths": [2, 4, 6],
   "widths": [16, 23, 32, 45, 64, 91, 128, 181, 256, 362, 512],
   "network_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
-  "num_layers": 16,
+  "num_layers": 4,
   "nonlin": "relu",
   "base_seed": 0,
   "quadrature_nodes": 400,

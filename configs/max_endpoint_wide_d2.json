@@ -1,0 +1,22 @@
+{
+  "run_name": "max_endpoint_wide_d2",
+  "widths": [64, 91, 128, 181, 256, 362, 512, 724, 1024],
+  "network_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  "num_layers": 2,
+  "nonlin": "relu",
+  "base_seed": 0,
+  "quadrature_nodes": 400,
+  "quadrature_convergence_factor": 2,
+  "check_dense_vs_factorized_max_n": 16,
+  "reference": {
+    "backend": "spherical",
+    "validate_backend": true,
+    "target_se": 4e-05,
+    "target_se_by_width": {"181": 3e-05, "256": 2.4e-05, "362": 2e-05, "512": 1.6e-05, "724": 1.4e-05, "1024": 1.2e-05},
+    "min_samples": 4000000,
+    "max_samples": 2000000000,
+    "batch_size": 262144,
+    "gaussian_var_samples": 4000000
+  },
+  "mc_validation": {"enabled": false, "widths": [], "repeats": 32, "samples": 16384}
+}

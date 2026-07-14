@@ -1,5 +1,8 @@
-"""Wrapper: run the full argmax-endpoint experiment (see configs/argmax_endpoint_full.json)."""
+"""Wrapper: run the full argmax-endpoint experiment at depths 2, 4, 6
+(see configs/argmax_endpoint_full.json). Each depth is its own resumable
+run directory: <run_name>_depth<d>."""
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -17,6 +20,11 @@ if __name__ == "__main__":
     parser.add_argument("--run-name", type=str, default=None)
     args, _ = parser.parse_known_args()
     cfg_path = ROOT / "configs" / "argmax_endpoint_full.json"
-    overrides = {"run_name": args.run_name} if args.run_name else {}
-    cfg = ArgmaxExperimentCfg.from_json(cfg_path, **overrides)
-    run_experiment(cfg)
+    raw = json.loads(cfg_path.read_text())
+    depths = raw.get("depths", [2, 4, 6])
+    base = args.run_name or raw["run_name"]
+    for depth in depths:
+        cfg = ArgmaxExperimentCfg.from_json(
+            cfg_path, run_name=f"{base}_depth{depth}", num_layers=depth
+        )
+        run_experiment(cfg)

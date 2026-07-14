@@ -64,10 +64,17 @@ class ReferenceCfg:
     backend: str = "spherical"           # "spherical" | "gaussian"
     validate_backend: bool = True        # cross-check spherical vs gaussian at min width
     target_se: float = 1e-4
+    # Optional per-width override (JSON keys are strings): lets wide sweeps
+    # push the noise floor (se^2) below the expected MSE at large n without
+    # over-sampling small widths.
+    target_se_by_width: dict = field(default_factory=dict)
     min_samples: int = 1_000_000
     max_samples: int = 100_000_000
     batch_size: int = 262_144
     gaussian_var_samples: int = 2_000_000  # extra stream for Var_X(max), MC baseline
+
+    def target_se_for(self, width: int) -> float:
+        return float(self.target_se_by_width.get(str(width), self.target_se))
 
 
 @dataclass
@@ -195,14 +202,15 @@ def reference_task(cfg: ExperimentCfg, width: int, net_seed: int, device: torch.
     backend = r.backend
     if backend == "spherical" and mlp.has_bias():
         backend = "gaussian"
+    width_target_se = r.target_se_for(width)
     ref_a = reference_estimate(
         mlp, seed=derive_seed(cfg.base_seed, width, net_seed, "refA"), backend=backend,
-        target_se=r.target_se, min_samples=r.min_samples, max_samples=r.max_samples,
+        target_se=width_target_se, min_samples=r.min_samples, max_samples=r.max_samples,
         batch_size=r.batch_size, device=device,
     )
     ref_b = reference_estimate(
         mlp, seed=derive_seed(cfg.base_seed, width, net_seed, "refB"), backend=backend,
-        target_se=r.target_se, min_samples=r.min_samples, max_samples=r.max_samples,
+        target_se=width_target_se, min_samples=r.min_samples, max_samples=r.max_samples,
         batch_size=r.batch_size, device=device,
     )
     # Gaussian-input per-sample variance (for the standard MC baseline curve),
