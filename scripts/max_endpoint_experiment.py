@@ -259,6 +259,12 @@ def kprop_task(
 
     dtype = getattr(torch, cfg.dtype)
     torch.set_default_dtype(dtype)
+    # Large-width kprop towers (n^3 diagonal slices) need the whole card:
+    # release cached blocks left over from the previous variant.
+    import gc
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
     mlp = build_mlp(cfg, width, net_seed, device).to(dtype)
     kind = Kind[variant["kind"]]
     if device.type == "cuda":

@@ -84,12 +84,25 @@ def hierarchical_bootstrap_ci(
 
 
 def aggregate(df: pd.DataFrame, raw_rows: list[dict]) -> pd.DataFrame:
-    """Aggregate per (method, width) with hierarchical bootstrap CIs."""
+    """Aggregate per (method, width) with hierarchical bootstrap CIs.
+
+    Rows from towers with clamped (truncation-negative) variances are
+    EXCLUDED here and from fits: their raw q blows up by many orders of
+    magnitude (sigma ~ 1e-5 spikes) and would render the means meaningless.
+    They are flagged, not hidden: the exclusion count is printed and saved,
+    and the simplex-diagnostics figure displays all rows including them.
+    """
+    excluded = sum(1 for r in raw_rows if r.get("num_clamped_var", 0) > 0)
+    if excluded:
+        print(f"NOTE: excluding {excluded} rows from clamped-variance (diverged) "
+              f"towers from aggregates/fits; see argmax_simplex_diagnostics and "
+              f"per-row status flags.")
+    df = df[pd.to_numeric(df["num_clamped_var"], errors="coerce").fillna(0) == 0].copy()
     blocks: dict[tuple, dict[int, np.ndarray]] = {}
     for r in raw_rows:
         key = (r.get("kprop_variant"), r.get("estimator_name"))
         base = PRIMARY_METHODS.get(key, (None,))[0]
-        if base is None or r.get("status") == "failed":
+        if base is None or r.get("status") == "failed" or r.get("num_clamped_var", 0) > 0:
             continue
         method = base + "_" + r["estimator_projection"]
         bm = np.asarray(r.get("block_mse", []), dtype=float)
@@ -221,7 +234,7 @@ def plot_mse_vs_width(agg, raw_rows, results_dir):
     for r in raw_rows:
         key = (r.get("kprop_variant"), r.get("estimator_name"))
         base = PRIMARY_METHODS.get(key, (None,))[0]
-        if base is None or r.get("status") == "failed":
+        if base is None or r.get("status") == "failed" or r.get("num_clamped_var", 0) > 0:
             continue
         method = base + "_" + r["estimator_projection"]
         bm = np.asarray(r.get("block_mse", []), dtype=float)
