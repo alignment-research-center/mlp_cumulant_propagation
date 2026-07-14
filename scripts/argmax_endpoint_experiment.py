@@ -319,25 +319,32 @@ def dense_check_task(
     path = out / "tasks" / f"argmax_densecheck_w{width}_s{net_seed}.json"
     if path.exists():
         return json.loads(path.read_text())
-    mlp = build_mlp(cfg, width, net_seed, device)
-    k_in = {1: torch.zeros(width, device=device), 2: torch.eye(width, device=device)}
-    K = mlp_kprop(mlp, k_in, k_max=3, kind=Kind.AUGMENT, factor=True,
-                  use_avg_metric=cfg.use_avg_metric)
-    res_fac = argmax_endpoint_estimate(K, device=device)
-    K_dense = dict(K)
-    K_dense[3] = HTensor(K[3].to_tensor().to(torch.float64), r=0)
-    K_dense[4] = HTensor(K[4].to_tensor().to(torch.float64), r=0)
-    res_dense = argmax_endpoint_estimate(
-        K_dense, device=device, dense_max_n=cfg.check_dense_vs_factorized_max_n
-    )
-    max_linf = 0.0
-    for name in res_fac.q_raw:
-        d = float((res_fac.q_raw[name] - res_dense.q_raw[name]).abs().max())
-        max_linf = max(max_linf, d)
-    payload = {
-        "width": width, "net_seed": net_seed, "max_q_linf_diff": max_linf,
-        "passed": bool(max_linf < 1e-6),
-    }
+    try:
+        mlp = build_mlp(cfg, width, net_seed, device)
+        k_in = {1: torch.zeros(width, device=device), 2: torch.eye(width, device=device)}
+        K = mlp_kprop(mlp, k_in, k_max=3, kind=Kind.AUGMENT, factor=True,
+                      use_avg_metric=cfg.use_avg_metric)
+        res_fac = argmax_endpoint_estimate(K, device=device)
+        K_dense = dict(K)
+        K_dense[3] = HTensor(K[3].to_tensor().to(torch.float64), r=0)
+        K_dense[4] = HTensor(K[4].to_tensor().to(torch.float64), r=0)
+        res_dense = argmax_endpoint_estimate(
+            K_dense, device=device, dense_max_n=cfg.check_dense_vs_factorized_max_n
+        )
+        max_linf = 0.0
+        for name in res_fac.q_raw:
+            d = float((res_fac.q_raw[name] - res_dense.q_raw[name]).abs().max())
+            max_linf = max(max_linf, d)
+        payload = {
+            "width": width, "net_seed": net_seed, "max_q_linf_diff": max_linf,
+            "passed": bool(max_linf < 1e-6),
+        }
+    except Exception as e:  # a diverged tower must not kill the sweep
+        logger.exception(f"dense check w{width} s{net_seed} failed")
+        payload = {
+            "width": width, "net_seed": net_seed, "max_q_linf_diff": float("nan"),
+            "passed": False, "error": f"{type(e).__name__}: {e}",
+        }
     atomic_write_json(path, payload)
     return payload
 
@@ -349,6 +356,8 @@ def mc_validation_task(
     path = out / "tasks" / f"argmax_mcval_w{width}_s{net_seed}.json"
     if path.exists():
         return json.loads(path.read_text())
+    # Pure sampling task (no kprop); failures here should also never kill the
+    # sweep, so the caller logs `ratio` defensively.
     mlp = build_mlp(cfg, width, net_seed, device)
     m = cfg.mc_validation.samples
     reps = cfg.mc_validation.repeats
@@ -493,8 +502,11 @@ def run_experiment(cfg: ArgmaxExperimentCfg) -> Path:
                 f"passed={chk['passed']}"
             )
         if cfg.mc_validation.enabled and width in tuple(cfg.mc_validation.widths):
-            v = mc_validation_task(cfg, width, seed, device, out)
-            logger.info(f"[w{width} s{seed}] MC-formula validation ratio {v['ratio']:.3f}")
+            try:
+                v = mc_validation_task(cfg, width, seed, device, out)
+                logger.info(f"[w{width} s{seed}] MC-formula validation ratio {v['ratio']:.3f}")
+            except Exception:
+                logger.exception(f"[w{width} s{seed}] MC validation failed (continuing)")
         logger.info(f"[w{width} s{seed}] done in {time.time() - t0:.1f}s")
 
     if rank == 0:

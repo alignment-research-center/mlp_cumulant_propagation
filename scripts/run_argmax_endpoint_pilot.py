@@ -1,8 +1,10 @@
 """Wrapper: run the pilot argmax-endpoint experiment at depths 2, 4, 6
-(see configs/argmax_endpoint_pilot.json). Each depth is its own resumable
-run directory: <run_name>_depth<d>."""
+(see configs/argmax_endpoint_pilot.json). Each depth gets its own resumable
+results directory: $RESULTS_DIR/depth<d> (or data/argmax_endpoint/<run>_depth<d>
+locally), because task filenames do not encode depth."""
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -23,7 +25,10 @@ if __name__ == "__main__":
     raw = json.loads(cfg_path.read_text())
     depths = raw.get("depths", [2, 4, 6])
     base = args.run_name or raw["run_name"]
+    base_results = os.environ.get("RESULTS_DIR")
     for depth in depths:
+        if base_results:
+            os.environ["RESULTS_DIR"] = str(Path(base_results) / f"depth{depth}")
         cfg = ArgmaxExperimentCfg.from_json(
             cfg_path, run_name=f"{base}_depth{depth}", num_layers=depth
         )
