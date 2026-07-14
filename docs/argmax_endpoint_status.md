@@ -102,6 +102,19 @@ m = floor(flops_total / flops_per_argmax_sample); no spherical baseline
   unresolvable sigma ~ 1e-5 spike under the fixed grid, visible as a large
   simplex_residual — flagged, not hidden.
 
+## Remote test environment notes (kunalc-2)
+
+- Full suite on kunalc-2 (A100 40GB, GPU-enabled): 221 passed initially;
+  tests/symb failures diagnosed as (a) rsynced macOS `__pycache__` baking
+  local paths into co_filename (remote pycache removed), (b) OpenMPI on the
+  denvr calgary image failing MPI_Init with default transports — fixed with
+  OMPI_MCA_btl=tcp,self OMPI_MCA_pml=ob1 (added to RUN_ENV), after which
+  tests/symb/test_parallelize::test_multi_map passes; (c) the remaining 13
+  symb-kprop tests require SageMath (`from sage.all import Graph`), an
+  optional conda-only dependency the repo's `uv sync` env does not provide
+  (pre-existing; the symbolic pipeline is not used by the scalar or argmax
+  endpoints). Runnable suite: 222 passed, 0 failed.
+
 ## Tests run
 
 - `uv run pytest -q --ignore=tests/symb` (tests/symb requires an MPI runtime
@@ -109,10 +122,24 @@ m = floor(flops_total / flops_per_argmax_sample); no spherical baseline
   on kunalc).
 - Status: see final report / CI notes below.
 
+## Depth setting (user-directed change)
+
+Originally smoke depth 4, pilot/full depth 16. Per user instruction
+(2026-07-13): no depths >= 9; pilot and full run at num_layers in {2, 4, 6}
+(one resumable run directory per depth: <run_name>_depth<d>; the pilot/full
+wrappers loop over the "depths" list in the config). Smoke stays at depth 4.
+
 ## Cluster jobs
 
-- (to be filled as launched) smoke -> pilot -> full on instance `kunalc`,
-  one GPU, RESULTS_DIR under the arc-infra run root.
+- Per user instruction, experiments run on a NEW instance `kunalc-2`
+  (1x A100 80GB), NOT on `kunalc` (in use by another agent; left untouched).
+  First kunalc-2 attempt (hyperstack montreal) died at creation: "no
+  deployable capacity"; record deleted, relaunched on denvr.
+- (to be filled as launched) smoke -> pilot (depths 2,4,6) -> full
+  (depths 2,4,6), one GPU, RESULTS_DIR under the arc-infra run root.
+- Memory headroom check (local, CPU): factored K3 rank R = 13n; VE joins
+  reduce to matmuls, largest materialized table ~ 2Q x 13n (~42 MB at n=512,
+  Q=400); endpoint FLOPs scale ~ n^2 (measured 3.97x from n=32 to 64).
 
 ## Open issues
 

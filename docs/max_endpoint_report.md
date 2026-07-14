@@ -163,3 +163,39 @@ n=512 grows with depth (0.055 at depth 2, 0.080 at depth 4, 0.19 at depth
 fast exactly when those correlations are small. Caveat: the depth-2 n=512
 MSE is only ~8x above the reference noise floor (9e-10); resolving deeper
 would need tighter references.
+
+## 18. Wide-width scaling sweep (n = 64..1024, depths 2 and 4, 10 seeds)
+
+Run `max_endpoint_widesweep` (results `.../max_endpoint_widesweep/results/depth{2,4}/`).
+900 tasks, zero failures; per-width reference SE targets kept the cross-fidelity
+noise floor >= 8x below the smallest MSE — every (method, width) point resolved,
+including n=1024 (depth-2 refs used ~9.5e8 samples/stream at se=1.2e-5).
+
+Fitted exponents, log MSE = a + b log n over 9 half-octave widths
+(bootstrap 95% CI over 10 seeds); FLOP exponent from mean total online FLOPs:
+
+| depth | method | MSE slope b | FLOPs ~ n^c | MSE@1024 | MC/det @1024 |
+|---|---|---|---|---|---|
+| 2 | product_gaussian | −1.55 [−1.70,−1.30] | 1.14 | 1.3e-04 | 259 |
+| 2 | pg_plus_cov1 | −1.42 [−1.47,−1.37] | 2.04 | 4.7e-05 | 0.2 |
+| 2 | pg_plus_cov2 | −1.85 [−1.94,−1.73] | 2.04 | 3.6e-06 | 2.2 |
+| 2 | pg_plus_cov2_k3 | −1.70 [−1.79,−1.59] | 2.03 | 3.5e-07 | 4.1 |
+| 2 | k4trace_simple | **−3.22 [−3.52,−2.86]** | 2.03 | 1.2e-09 | **1236** |
+| 2 | k4trace_augment | −3.20 [−3.56,−2.81] | 2.09 | 1.5e-09 | 827 |
+| 4 | product_gaussian | −1.50 [−1.80,−1.28] | 1.21 | 2.8e-04 | 192 |
+| 4 | pg_plus_cov2 | −1.74 [−1.82,−1.64] | 2.07 | 1.3e-05 | 1.1 |
+| 4 | pg_plus_cov2_k3 | −1.93 [−2.01,−1.77] | 2.08 | 6.8e-07 | 1.8 |
+| 4 | k4trace_simple | −2.40 [−2.54,−2.14] | 2.08 | 9.7e-08 | 12.7 |
+| 4 | k4trace_augment | −2.57 [−2.76,−2.21] | 2.22 | 8.3e-08 | 7.3 |
+
+Observations (empirical; no theorem claimed):
+- The full estimator (cov2+k3+k4trace) decays like ~n^-3.2 at depth 2 and
+  ~n^-2.4..-2.6 at depth 4, while its cost grows only ~n^2.0-2.2 over this
+  range (kprop's asymptotic n^4 has not kicked in by n=1024). MSE-vs-FLOPs
+  slope ~ -1.6/-1.2, steeper than MC's -1: the matched-budget advantage widens
+  with width (depth 2: 2.6x at n=128 -> ~1200x at n=1024).
+- The kappa4 double-trace term is what unlocks the fast decay: E2_k3 without
+  it sits at slope ~-1.7 (its residual is dominated by the omitted trace
+  sector), and adding C4_trace jumps the slope to ~-3.2.
+- The earlier 4-point depth-2 estimate (-3.7) is refined to -3.2 +- 0.3 by the
+  9-point, 10-seed fit.
