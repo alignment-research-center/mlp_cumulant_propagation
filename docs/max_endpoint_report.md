@@ -137,3 +137,29 @@ independent base with a correlated-Gaussian max (resumming Sigma exactly).
   never silently repaired.
 - Upstream order-dependent `crit_init` test fragility and SageMath/MPI symb
   test requirements (pre-existing).
+
+## 17. Depth sweep (depths 2 and 4; widths 128/256/512; 4 seeds)
+
+Run `max_endpoint_depthsweep` (results under `.../max_endpoint_depthsweep/results/depth{2,4}/`,
+plots in `depth{2,4}/plots_local/`). Zero failed tasks; whole sweep ran in ~7
+minutes on the A100 (vs hours at depth 16), consistent with the cost being a
+depth-16 artifact.
+
+MC/deterministic matched-budget ratio (>1 = deterministic wins), k4trace_simple:
+
+| depth | n=128 | n=256 | n=512 |
+|---|---|---|---|
+| 2 | 2.6 | 40 | **248** |
+| 4 | 0.42 | 0.38 | **4.8** |
+| 16 (sec. 13) | 0.003 | 0.006 | 0.02 |
+
+At depth 2 the full estimator reaches MSE 7.3e-9 at n=512 (vs matched-budget
+MC 1.8e-6) with an MSE-vs-width decay ~n^-3.7 over 128->512 — two-plus orders
+of magnitude better than MC and steepening with width. At depth 4 it crosses
+above MC around n~512 (4-5x). At depth 16 it loses by ~50x. The mechanism
+matches the diagnosis in sec. 15: the RMS pairwise output correlation at
+n=512 grows with depth (0.055 at depth 2, 0.080 at depth 4, 0.19 at depth
+16), and the Edgeworth expansion around the independent Gaussian converges
+fast exactly when those correlations are small. Caveat: the depth-2 n=512
+MSE is only ~8x above the reference noise floor (9e-10); resolving deeper
+would need tighter references.
