@@ -199,3 +199,21 @@ Observations (empirical; no theorem claimed):
   sector), and adding C4_trace jumps the slope to ~-3.2.
 - The earlier 4-point depth-2 estimate (-3.7) is refined to -3.2 +- 0.3 by the
   9-point, 10-seed fit.
+
+### 18b. FLOP-scaling correction: component split
+
+Splitting `flops_total = flops_kprop + flops_endpoint` (k3_simple, both depths):
+`flops_kprop` scales as **n^2.98-2.99** (theory: Theta(n^3) for factored
+k_max=3 — dominated by FactoredTensor.contract_W and get_dslice, both
+Theta(n^2 R) with kappa3 rank R ~= 3n per nonlinear layer), while
+`flops_endpoint` is exactly **n^2.00** (Theta(Q n^2) at fixed Q=400+800
+quadrature nodes; the C3 contraction is Q*n*R = 3Q*n^2 because the rank index
+is an elimination variable, never a materialized third tensor leg). Through
+n=1024 the endpoint constant (~3.5e5 n^2 at depth 2) dominates the kprop term
+(~42 n^3), giving the measured total slope ~2.03-2.19 (local slope rising:
+2.08/2.19 at 512->1024); the two terms cross at n* ~ 8000 (depth 2) / ~3200
+(depth 4), beyond which total cost is the theoretical Theta(n^3). The n^2
+statement in sec. 18 is therefore *pre-asymptotic*; asymptotically
+MSE-vs-FLOPs slope for the full estimator is -3.2/3 ~= -1.07 (still steeper
+than MC's -1, but only marginally — the observed widening advantage through
+n=1024 rides on the pre-asymptotic n^2 cost regime).
