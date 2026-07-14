@@ -217,3 +217,34 @@ statement in sec. 18 is therefore *pre-asymptotic*; asymptotically
 MSE-vs-FLOPs slope for the full estimator is -3.2/3 ~= -1.07 (still steeper
 than MC's -1, but only marginally — the observed widening advantage through
 n=1024 rides on the pre-asymptotic n^2 cost regime).
+
+### 18c. Are the MSE exponents asymptotic? (depth-4 extension to n=2048)
+
+Run `max_endpoint_wide_d4_ext` (n=1448, 2048; 10 seeds) plus windowed-slope
+analysis of the existing grids:
+
+- `pg_plus_cov2` (E2_cov2): windowed 3-point slopes are stable (~-1.7 to -2.0)
+  across 64..2048 (32x in width); global LS slope -1.75, top-half -1.78.
+  This exponent IS asymptotic to within the data.
+- `pg_plus_cov2_k3` (E2_k3): slopes drift monotonically steeper at the top
+  (-1.73 at 512-1024 -> -2.69 -> -3.28 at 1024-2048); NOT yet asymptotic.
+  Its error is dominated by the omitted kappa4-trace term whose relative
+  magnitude decays slowly (~n^-0.8), mixed with faster components.
+- `k4trace_simple` (E2_full): windowed slopes swing (-2.0 -> -3.3 -> -5.5)
+  and keep steepening; MSE reaches 2.1e-9 at n=2048, which is only 1.3x the
+  reference noise floor (1.6e-9) — the last point is UNRESOLVED by the 2x
+  criterion, and its mean bias (4.1e-5) is only ~3 sigma of the reference
+  noise. Conclusion: the E2_full exponent is NOT pinned; the data constrain
+  it between the global fit (-2.8) and the top-half fit (-3.7), still
+  steepening at n=2048. Pinning it needs se ~ 1e-5 references at n=1448-2048
+  (~1e9 samples/stream, ~1-2 GPU-h per stream) or many more seeds.
+- Mechanistically the errors are bias-dominated at depth 4 (bias fraction
+  0.6-0.96), and the bias is a signed sum of correction terms with different
+  decay rates (at depth 2 it visibly crosses zero mid-grid near n~360-500,
+  locally inflating fitted slopes). Like the FLOP counts, the MSE fits over
+  finite width ranges are mixtures; single-exponent summaries should be read
+  as effective slopes for the quoted range only.
+- k3_augment is unavailable at n=2048 on one A100-80GB (its r=1 kappa4 sector
+  requires ~2 n^3 live floats; OOM recorded per task). k3_simple, which had
+  indistinguishable MSE from augment at every resolved width, carries the
+  scaling analysis.
