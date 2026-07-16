@@ -1,0 +1,30 @@
+{
+  "run_name": "direct_edgeworth_max_d4probe",
+  "widths": [160, 192, 224, 256],
+  "extended_widths": [],
+  "network_seeds": [0, 1],
+  "num_layers": 4,
+  "nonlin": "relu",
+  "base_seed": 0,
+  "variants": ["k2_simple", "k3_simple"],
+  "quadrature_nodes": 256,
+  "quadrature_convergence_factor": 2,
+  "node_chunk": 8,
+  "max_dense_bytes": 30000000000,
+  "check_vs_treewidth_max_n": 0,
+  "reference": {
+    "backend": "spherical",
+    "validate_backend": false,
+    "target_se": 1e-3,
+    "min_samples": 1000000,
+    "max_samples": 8000000,
+    "batch_size": 262144,
+    "gaussian_var_samples": 1000000
+  },
+  "mc_validation": {
+    "enabled": false,
+    "widths": [],
+    "repeats": 8,
+    "samples": 8192
+  }
+}
