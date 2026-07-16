@@ -9,7 +9,7 @@
   "quadrature_nodes": 128,
   "quadrature_convergence_factor": 2,
   "node_chunk": 16,
-  "max_dense_bytes": 40000000000,
+  "max_dense_bytes": 30000000000,
   "check_vs_treewidth_max_n": 32,
   "reference": {
     "backend": "spherical",

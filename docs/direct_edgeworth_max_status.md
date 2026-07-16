@@ -58,12 +58,24 @@ Extended widths (192-512) run k1/k2 only with dense_orders=(2,): E0/E1.
 
 - Baseline before changes: 198 passed (tests/symb excluded: needs MPI/Sage,
   pre-existing).
-- With new tests: see below (target: all pass).
+- With new tests (26 added): 224 passed locally (macOS CPU).
+- Local smoke (depths 2 & 4, widths 8/12/16, 2 seeds, CPU): healthy at depth 2
+  (nested ladder improves MSE; direct-vs-treewidth rel diff <= 3e-8 everywhere
+  it is defined). At depth 4 and n <= 12 the k_max=3 truncated expansion
+  genuinely diverges (all variances clamped, quadrature error O(1..1e2)) —
+  the *known* upstream small-width divergence; rows carry
+  `negative_variance_clamped` and huge `quadrature_convergence_error`, and the
+  treewidth cross-check now reports `undefined_in_divergent_regime` there
+  instead of a spurious FAIL.
 
 ## Cluster log
 
-- (pending)
+- Commit `7878791` (branch experiment/max-endpoint), upstream `6e80f7f`.
+- Recreated instance `kunalc` (user killed the previous one and expressly
+  authorized recreating this one instance): `launch kunalc --num-gpus 1 --auto`.
+- (runs pending)
 
 ## Open issues
 
-- (none yet)
+- k_max=3 divergence at (depth 4, n <= 12) and expected worse at depth 6 —
+  handled by flagging, excluded from fits, reported not hidden.
