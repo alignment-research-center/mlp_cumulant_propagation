@@ -68,6 +68,21 @@ Extended widths (192-512) run k1/k2 only with dense_orders=(2,): E0/E1.
   treewidth cross-check now reports `undefined_in_divergent_regime` there
   instead of a spurious FAIL.
 
+## Dense memory plan (float64)
+
+| n | D2 (n^2) | D3 (n^3) | D4 (n^4) |
+|---|---|---|---|
+| 16 | 2.0 KB | 32 KB | 0.5 MB |
+| 64 | 33 KB | 2.1 MB | 134 MB |
+| 128 | 131 KB | 16.8 MB | 2.15 GB |
+| 192 | 295 KB | 56.6 MB | 10.9 GB |
+| 256 | 524 KB | 134 MB | 34.4 GB (> 30 GB guard: refused) |
+
+Chunked build intermediate: node_chunk * n^3 * 8 B (0.27 GB at n=128,
+chunk 16). kunalc is an A100 **40 GB** (previous instance was 80 GB), so
+max_dense_bytes = 30 GB; the guard refuses n >= 256 at order 4, and the
+d4probe run measures the practical wall-clock/OOM ceiling at 160-224.
+
 ## Cluster log
 
 - Commit `7878791` (branch experiment/max-endpoint), upstream `6e80f7f`.

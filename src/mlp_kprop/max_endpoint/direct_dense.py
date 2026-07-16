@@ -255,10 +255,18 @@ class _DenseCumulants:
 
         self.k3_dense: Tensor | None = None
         self.k3_repr = "none"
+        self.refused: dict[str, str] = {}
         if 3 in K:
             K3 = K[3]
-            _guard_dense(n, 3, 1, max_dense_bytes, "kappa3_densify")
-            if isinstance(K3, FactoredTensor):
+            try:
+                _guard_dense(n, 3, 1, max_dense_bytes, "kappa3_densify")
+            except DenseMemoryError as e:
+                self.refused["kappa3"] = str(e)
+                self.status.append("dense_refused_kappa3")
+                K3 = None
+            if K3 is None:
+                pass
+            elif isinstance(K3, FactoredTensor):
                 # to_tensor() = Sym(sum_r a_r x b_r x c_r); densification cost
                 # ~ 2 n^3 R for the unfactored product plus 6 n^3 for Sym.
                 rank = K3.factors[0].shape[1]
@@ -328,7 +336,7 @@ def _corrections_at_nodes(
             dense_track["shape"] = (n,) * order
         dense_track["bytes"] = max(dense_track["bytes"], est)
 
-    want = set(cfg.dense_orders)
+    want = set(dense_track["effective_orders"])
     if cum.cov_od is not None and 2 in want:
         track(2)
         D2 = dense_derivative_tensor(ws, 2, cfg.node_chunk, cfg.max_dense_bytes, tally)
@@ -417,6 +425,18 @@ def direct_dense_estimate(
     tally = _Tally()
     dense_track = {"order": 0, "shape": (), "bytes": 0}
     cum = _DenseCumulants(K, cfg.quad.dtype, device, cfg.max_dense_bytes, tally)
+    # Refuse unaffordable derivative orders up-front (graceful degradation):
+    # a refused D4 loses E2_cov/E2_k3/E2_k3_k4trace but keeps E0/E1.
+    refused = dict(cum.refused)
+    effective_orders = []
+    for order in sorted(set(cfg.dense_orders)):
+        try:
+            _guard_dense(cum.n, order, cfg.node_chunk, cfg.max_dense_bytes, f"D{order}")
+            effective_orders.append(order)
+        except DenseMemoryError as e:
+            refused[f"D{order}"] = str(e)
+            cum.status.append(f"dense_refused_D{order}")
+    dense_track["effective_orders"] = tuple(effective_orders)
     lo, hi = find_endpoints(cum.mu, cum.sigma, cfg.quad.tail_log_eps, cfg.quad.bisect_iters)
     q1 = cfg.quad.num_nodes
     q2 = cfg.quad.convergence_factor * q1
@@ -441,5 +461,5 @@ def direct_dense_estimate(
         num_clamped_var=cum.params.num_clamped_var,
         k3_repr=cum.k3_repr,
         k4_sector=cum.k4_sector,
-        info={"lo": lo, "hi": hi, "num_nodes": (q1, q2)},
+        info={"lo": lo, "hi": hi, "num_nodes": (q1, q2), "dense_refused": refused},
     )

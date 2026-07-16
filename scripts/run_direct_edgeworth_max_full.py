@@ -1,6 +1,7 @@
-"""Wrapper: full direct-Edgeworth-max experiment at depths 2, 4 and 6
-(widths 16..128 all methods + 192..512 E0/E1 only, 20 seeds;
-see configs/direct_edgeworth_max_full.json)."""
+"""Wrapper: full direct-Edgeworth-max experiment at depth 4 (user-specified
+grid): widths 128/256 all methods (dense D4 refused at 256 by the memory
+guard, recorded) + 512/1024 E0/E1 only, 5 seeds;
+see configs/direct_edgeworth_max_full.json."""
 import argparse
 import os
 import sys
@@ -14,7 +15,7 @@ except NameError:
 sys.path.insert(0, str(ROOT / "scripts"))
 from direct_edgeworth_max_experiment import DirectCfg, run_experiment  # noqa: E402
 
-DEPTHS = (2, 4, 6)
+DEPTHS = (4,)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

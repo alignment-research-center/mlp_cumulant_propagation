@@ -302,6 +302,19 @@ def direct_task(
             status=";".join(sorted(set(res.status))) or "ok",
             warning="",
         ))
+    if not rows:
+        # Every estimator owned by this variant was refused (e.g. D4 over the
+        # dense-memory guard). Record the precise stopping reason.
+        rows = [dict(
+            base_row,
+            estimator_name="NONE_AVAILABLE",
+            status="dense_refused",
+            warning=" | ".join(res.info.get("dense_refused", {}).values()) or
+                    ";".join(sorted(set(res.status))),
+            flops_kprop=krec.total,
+            wall_seconds_kprop=wall_kprop,
+            peak_gpu_memory_bytes=peak_mem,
+        )]
     atomic_write_json(path, {"rows": rows})
     return rows
 

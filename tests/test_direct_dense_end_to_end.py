@@ -143,6 +143,22 @@ def test_kmax1_and_kmax2_towers():
     assert "k4_trace_unavailable" in r2.status
 
 
+def test_d4_refusal_degrades_gracefully():
+    """A max_dense_bytes too small for D4 (but fine for D2/D3) must keep
+    E0/E1/E2_k3-prerequisites gracefully: E0/E1 present, D4-based estimators
+    absent, refusal recorded in status and info."""
+    n = 16
+    _, K = _tower(n, 3, Kind.SIMPLE, k_max=3, factor=True, seed=7)
+    # D4 = 16^4 * 8 = 524288 B (+ intermediates); D3 = 32768 B.
+    cfg = DirectDenseCfg(quad=QuadratureCfg(num_nodes=64), max_dense_bytes=200_000)
+    r = direct_dense_estimate(K, cfg)
+    assert set(r.estimates) == {"E0_product_gaussian", "E1_cov1"}
+    assert "dense_refused_D4" in r.status
+    assert "D4" in r.info["dense_refused"]
+    assert "C3" in r.corrections and "C2sq_half" not in r.corrections
+    assert r.largest_dense_tensor_order == 3
+
+
 def test_dense_orders_restriction():
     """dense_orders=(2,) computes only E0/E1 (extended-width mode)."""
     n = 8
