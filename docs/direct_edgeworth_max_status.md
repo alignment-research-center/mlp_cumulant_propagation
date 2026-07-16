@@ -85,10 +85,21 @@ d4probe run measures the practical wall-clock/OOM ceiling at 160-224.
 
 ## Cluster log
 
-- Commit `7878791` (branch experiment/max-endpoint), upstream `6e80f7f`.
+- Commits `7878791` -> `3bc0fa7` (branch experiment/max-endpoint), upstream `6e80f7f`.
 - Recreated instance `kunalc` (user killed the previous one and expressly
-  authorized recreating this one instance): `launch kunalc --num-gpus 1 --auto`.
-- (runs pending)
+  authorized recreating this one instance): `launch kunalc --num-gpus 1 --auto`
+  -> verda/helsinki 1x A100-40GB. Host-key fix (ssh-keyscan) + `setup` rerun.
+- Runs (all on kunalc, results mirrored to
+  gs://arc-ml/kunalchawla/run/mlp_cumulant_propagation/2026-07-16/...):
+  - `direct_edgeworth_max_smoke` (depths 2,4; matches local smoke; healthy).
+  - `direct_edgeworth_max_pilot` — killed after user re-scoped the full grid
+    (own job); relaunched as `direct_edgeworth_max_pilot2` (depths 2,4,6,
+    widths 16..64, 8 seeds; 0 errors at depths 2/4; 12 expected
+    kprop_nonfinite divergences at depth 6 n<=24; ~35 min).
+  - `direct_edgeworth_max_full` — USER GRID: depth 4, 5 seeds, widths
+    128/256/512/1024 (E0/E1 only at >=256; D4 refused at 256 with recorded
+    reason). 70 rows, all references at target, ~4 min.
+- Final analysis, plots, and numbers: docs/direct_edgeworth_max_report.md.
 
 ## Open issues
 
