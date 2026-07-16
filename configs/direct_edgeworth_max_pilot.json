@@ -1,0 +1,29 @@
+{
+  "run_name": "direct_edgeworth_max_pilot",
+  "widths": [16, 24, 32, 48, 64],
+  "extended_widths": [],
+  "network_seeds": [0, 1, 2, 3, 4, 5, 6, 7],
+  "num_layers": 4,
+  "nonlin": "relu",
+  "base_seed": 0,
+  "quadrature_nodes": 128,
+  "quadrature_convergence_factor": 2,
+  "node_chunk": 16,
+  "max_dense_bytes": 40000000000,
+  "check_vs_treewidth_max_n": 32,
+  "reference": {
+    "backend": "spherical",
+    "validate_backend": true,
+    "target_se": 3e-5,
+    "min_samples": 4000000,
+    "max_samples": 400000000,
+    "batch_size": 262144,
+    "gaussian_var_samples": 4000000
+  },
+  "mc_validation": {
+    "enabled": true,
+    "widths": [16, 64],
+    "repeats": 32,
+    "samples": 16384
+  }
+}

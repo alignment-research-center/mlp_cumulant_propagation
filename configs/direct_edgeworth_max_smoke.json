@@ -1,0 +1,29 @@
+{
+  "run_name": "direct_edgeworth_max_smoke",
+  "widths": [8, 12, 16],
+  "extended_widths": [],
+  "network_seeds": [0, 1],
+  "num_layers": 2,
+  "nonlin": "relu",
+  "base_seed": 0,
+  "quadrature_nodes": 64,
+  "quadrature_convergence_factor": 2,
+  "node_chunk": 16,
+  "max_dense_bytes": 40000000000,
+  "check_vs_treewidth_max_n": 32,
+  "reference": {
+    "backend": "spherical",
+    "validate_backend": true,
+    "target_se": 1e-4,
+    "min_samples": 1000000,
+    "max_samples": 16000000,
+    "batch_size": 262144,
+    "gaussian_var_samples": 1000000
+  },
+  "mc_validation": {
+    "enabled": true,
+    "widths": [16],
+    "repeats": 16,
+    "samples": 8192
+  }
+}
