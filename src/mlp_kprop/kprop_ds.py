@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 """
 Given a k_max budget parameter, we have the following conditions:
     - get_int_cond(k_max): Tracked cumulants with multi-index a satisfy |ceil(a/2)| <= k_max
-    - get_vec_cond(k_max): Diagrams summed over satisfy sum_a (|ceil(a/2)| - 1) <= k_max - 1, where a ranges over all blocks in diagram
+    - get_vec_cond(k_max): Diagrams summed over satisfy sum_a (|a| - 1 - 1[a even]) <= k_max - 1, where a ranges over all blocks in diagram
     - get_ein_cond(k_max): (Input, output) slices (a,b) satisfy |ceil((a∧b)/2)|<=k_max when contracting linear layers
 """
 
@@ -108,7 +108,7 @@ def nonlin_kprop(
         K_in: Input cumulants
         k_max: Budget parameter. We want final error O(n^{-k_max}). This corresponds to:
             - Tracking cumulants with multi-index a satisfying |ceil(a/2)| <= k_max
-            - Sum precisely the diagrams including cumulants with sum_a (|ceil(a/2)| - 1) <= k_max - 1
+            - Sum precisely the diagrams including cumulants with sum_a (|a| - 1 - 1[a even]) <= k_max - 1
             - NOTE: Internally, we also use k to refer to the index in the Wick expanison. This is unrelated to k_max.
         nonlin_wick_coef: 1d Wick coefficients wrt a Gaussian. (mean, var, k, p) -> E_{Z~N(mean,var)}[∂^k nonlin(Z)^p]
         use_mean_var: If true, expands Wick coef around Gaussian with var equal to the average variance estimate across neurons,

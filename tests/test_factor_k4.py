@@ -47,11 +47,20 @@ def test_from_dstensor():
     fA = FactoredTensor4.from_dstensor(dsA)
     assert torch.allclose(dsA.to_tensor(), fA.to_tensor())
 
+def test_factored_kprop_augment_not_implemented():
+    # The augmented Edgeworth term set includes diagrams with no O(n)-rank
+    # factorization, so the factored implementation rejects kind=AUGMENT.
+    n = 4
+    K = coerce_input({1: torch.zeros(n), 2: torch.eye(n)}, k_max=4, kind=Kind.AUGMENT)
+    WK = linear_kprop(K, torch.randn(n, n) * math.sqrt(2 / n), k_max=4, set_metric=2. * torch.ones(n))
+    with pytest.raises(NotImplementedError):
+        factored_nonlin_kprop_k4(K_in=WK, nonlin_wick_coef=relu_wick_coef, augment=True)
+
 @pytest.mark.parametrize(
     "kind,use_avg_metric,use_pK",
     [
         (kind, use_avg_metric, use_pK)
-        for kind, use_avg_metric in product([Kind.SIMPLE, Kind.AUGMENT, Kind.BASE], [True, False])
+        for kind, use_avg_metric in product([Kind.SIMPLE, Kind.BASE], [True, False])
         for use_pK in ([True, False] if kind == Kind.BASE else [True])
     ]
 )

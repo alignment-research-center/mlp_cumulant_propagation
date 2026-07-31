@@ -287,6 +287,16 @@ def factored_nonlin_kprop_k3(
     K_in should be the output of linear_kprop (with non-identity metric and bias already applied).
     '''
     assert not (base and augment), "base and augment modes are mutually exclusive"
+    if augment:
+        # The augmented Edgeworth term set (all diagrams of squared size Omega(n^{-k_max}),
+        # see get_vec_cond) includes diagrams with no O(n)-rank factorization, e.g. cycles
+        # of covariance blocks, so it cannot be reproduced within this representation's
+        # FLOP budget. TODO: Decide what factored-augmented should compute (e.g. only the
+        # factorable subset of the augmented diagrams) and reinstate it.
+        raise NotImplementedError(
+            "Factored nonlin_kprop does not support kind=AUGMENT with the augmented "
+            "Edgeworth truncation; use the unfactored nonlin_kprop instead."
+        )
     if not use_pK and not base:
         raise NotImplementedError("use_pK=False only implemented for base=True")
     WK = K_in
@@ -348,24 +358,15 @@ def factored_nonlin_kprop_k3(
         pK_slices[int_part] = symmetrize(pK_slices[int_part], vec=int_part)
 
     # 3.2 Compute pK slices that do need to be factored: just (1, 1, 1)
-    # Get WK slices
+    # The only (1, 1, 1) diagrams within the vec_cond budget (sum of block costs
+    # <= k_max - 1 = 2) are the single kappa_3 block (1, 1, 1) [cost 2] and the
+    # two-leg (1, 1) + (1, 1) covariance diagrams [cost 1 + 1]. Blocks such as
+    # (2, 1), (2, 2), or (2, 1, 1) each cost >= 2, so they cannot appear here.
     with flop_name('nonlin_sum 111 factored'):
         w = lambda k: get_wick_coef(k, 1)
         WK_11 = WK[2].core
-        if 3 in WK:
-            assert isinstance(WK[3], FactoredTensor)
-            WK_21 = diagslice(WK[3], (2, 1), output_zero_repeated=use_pK)
-        else:
-            WK_21 = torch.zeros_like(WK_11)
-        if 4 in WK:
-            assert isinstance(WK[4], HTensor)
-            assert WK[4].r == 1 if augment else 2
-            WK_22 = diagslice(WK[4], (2, 2), output_zero_repeated=use_pK)
-        else:
-            WK_22 = torch.as_tensor(0., device=WK_11.device, dtype=WK_11.dtype)
         if use_pK:
             WK_11 = zero_repeated(WK_11)
-        WK_12 = WK_21.T
 
         # (1, 1, 1) contrib
         if 3 in WK:
@@ -375,113 +376,12 @@ def factored_nonlin_kprop_k3(
         else:
             pK_111 = FactoredTensor(n=n, d=3, device=mean.device, dtype=mean.dtype)
 
-        # Hacky way to incorporate vec_part_coef
-        # Since there are no multiplicities in the vector partitions we consider,
-        # the vector partition coefficient is just 1 / prod_v v!
-        # where the product is over all vectors in the partition,
-        # Thus the coefficient factors by edge (i.e. by vector in partition).
-        WK_21 /= 2  # This divides WK_12 as well bc it's a view
-        WK_22 /= 4
-
-        # 2 legs; left leg has 1 j idx
+        # 2 legs: edges (i, j) and (j, k), both (1, 1) blocks
         # Split into 3 factors using A_{ij}B_{jk} = A_{ir}I_{jr}B^T_{kr}
-        fac1 = w(1)[:, None] * WK_11 + w(2)[:, None] * WK_21
+        fac1 = w(1)[:, None] * WK_11
         fac2 = torch.eye(n) * 3  # 3 = number of 3 vertex 2 edge graphs
-        fac3 = (
-            w(2)[:, None] * w(1)[None, :] * WK_11 +
-            w(3)[:, None] * w(1)[None, :] * WK_21 +
-            w(2)[:, None] * w(2)[None, :] * WK_12 +
-            w(3)[:, None] * w(2)[None, :] * WK_22
-        ).T
+        fac3 = (w(2)[:, None] * w(1)[None, :] * WK_11).T
         pK_111.add_factors_((fac1, fac2, fac3))
-
-        # 2 legs; left leg has 2 j idxs
-        fac1 = w(1)[:, None] * WK_12 + w(2)[:, None] * WK_22
-        fac2 = torch.eye(n) * 3  # 3 = number of 3 vertex 2 edge graphs
-        fac3 = (
-            w(3)[:, None] * w(1)[None, :] * WK_11 +
-            w(4)[:, None] * w(1)[None, :] * WK_21 +
-            w(3)[:, None] * w(2)[None, :] * WK_12 +
-            w(4)[:, None] * w(2)[None, :] * WK_22
-        ).T
-        pK_111.add_factors_((fac1, fac2, fac3))
-
-        # 112 -> 111 contribution from H(d=4, r=2), needed in simple mode when metric is full.
-        if not augment and 4 in WK and WK[4].metric.ndim == 2:
-            # Two possibilities:
-            # 1. 2-block goes on one metric (sym_coef=2/6 of possible pairings)
-            #    core * w(2)_i w(1)_j w(1)_k metric_{ii} metric_{jk} = core * sum_r w(2)_i metric_{ii} w(1)_j metric_{jr} w(1)_k I_{kr}
-            # 2. 2-block bridges two metrics (sym_coef=4/6 of possible pairings)
-            #    core * w(1)_i w(2)_j w(1)_k metric_{ij} metric_{jk} = core * sum_r w(1)_i metric_{ir} w(2)_j I_{jr} w(1)_k metric_{kr}
-            core = WK[4].core  # scalar for r=2
-            metric = WK[4].metric
-            metric_diag = metric.diagonal()
-            I = torch.eye(n, device=mean.device, dtype=mean.dtype)
-            ones = torch.ones_like(metric_diag)
-
-            # 1
-            fac1 = w(2)[:, None] * (core * metric_diag)[:, None] * ones[None, :]
-            fac2 = w(1)[:, None] * I
-            fac3 = w(1)[:, None] * metric
-            # vec_part_coef(((2, 1, 1),)) * |iso_class| * sym_coef = 1/2 * 3 * 2/6 = 1/2
-            fac3 *= 1 / 2
-            pK_111.add_factors_((fac1, fac2, fac3))
-
-            # 2
-            fac1 = w(1)[:, None] * metric * core
-            fac2 = w(2)[:, None] * I
-            fac3 = w(1)[:, None] * metric
-            # vec_part_coef(((2, 1, 1),)) * |iso_class| * sym_coef = 1/2 * 3 * 4/6 = 1
-            # so no need to multiply
-            pK_111.add_factors_((fac1, fac2, fac3))
-
-        # 211 H(d=4,r=1) -> 111 (only tracked in augment mode)
-        if augment and 4 in WK:
-            # Three possibilities:
-            # 1. 2-block goes on core (sym_coef=1/6 of possible pairings)
-            #    w(2)_i core_{ii} w(1)_j w(1)_k metric_{jk} = sum_r w(2)_i core_{ii} w(1)_j metric_{jr} w(1)_k Id_{kr}
-            # 2. 2-block bridges core and metric  (sym_coef=4/6 of possible pairings)
-            #    w(1)_i w(2)_j w(1)_k core_{ij} metric_{jk} = sum_r w(1)_i core_{ir} w(2)_j Id_{jr} w(1)_k metric_{kr}
-            # 3. 2-block goes on metric  (sym_coef=1/6 of possible pairings)
-            #    w(1)_i w(1)_j w(2)_k core_{ij} metric_{kk} = sum_r w(1)_i core_{ir} w(1)_j Id_{jr} w(2)_k metric_{kk}
-            core = WK[4].core
-            metric = WK[4].metric
-            if metric.ndim == 1:
-                metric_full = metric.diagflat()   # n, n
-                metric_diag = metric              # n
-            elif metric.ndim == 2:
-                metric_full = metric              # n, n
-                metric_diag = metric.diagonal()   # n
-            else:
-                raise ValueError(f"metric must be 1d or 2d, got shape {metric.shape}")
-            ones = torch.ones_like(metric_diag)
-            I = torch.eye(n, device=mean.device, dtype=mean.dtype)
-
-            # 1
-            fac1 = w(2)[:, None] * core.diagonal()[:, None] * ones[None, :]
-            fac2 = w(1)[:, None] * metric_full
-            fac3 = w(1)[:, None] * I
-            fac3 /= 4 # vec_part_coef(((2, 1, 1),)) * |iso_class| * sym_coef = 1/2 * 3 * 1/6 = 1/4
-            pK_111.add_factors_((fac1, fac2, fac3))
-
-            # 2
-            if metric.ndim == 2:
-                # This term is zero when metric is diagonal
-                fac1 = w(1)[:, None] * core
-                fac2 = w(2)[:, None] * I
-                fac3 = w(1)[:, None] * metric_full
-                # vec_part_coef(((2, 1, 1),)) * |iso_class| * sym_coef = 1/2 * 3 * 4/6 = 1
-                # so no need to multiply
-                pK_111.add_factors_((fac1, fac2, fac3))
-
-            # 3
-            fac1 = w(1)[:, None] * core
-            fac2 = w(1)[:, None] * I
-            fac3 = w(2)[:, None] *  metric_diag[:, None] * ones[None, :]
-            fac3 /= 4 # vec_part_coef(((2, 1, 1),)) * |iso_class| * sym_coef = 1/2 * 3 * 1/6 = 1/4
-            pK_111.add_factors_((fac1, fac2, fac3))
-
-        # We don't need to consider 3-ary pK tensors of higher order: degrees 5 and 6 are not tracked at all
 
     # If not use_pK, pK_slices already contain our cumulant estimate. Project to harmonic and return.
     if not use_pK:
