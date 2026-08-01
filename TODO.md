@@ -17,11 +17,15 @@
   is unaffected; test goldens have already been refreshed via
   `scripts/refresh_goldens.py`.)
 
-- Factored (factorized) cumulant propagation with `kind=AUGMENT` currently
-  raises `NotImplementedError`: the augmented diagram set includes terms with
-  no O(n)-rank factorization (e.g. cycles of covariance blocks such as the
-  (1,1)+(1,1)+(1,1) triangle, and top-degree-cumulant x covariance-edge
-  products), so the factored implementation cannot reproduce the unfactored
-  augmented output within its FLOP budget. Decide what "factorized augmented"
-  should compute (e.g. only the factorable/hypertree subset of the augmented
-  diagrams) and reinstate it in `factor_k3.py`/`factor_k4.py`.
+- Factored (factorized) cumulant propagation with `kind=AUGMENT` is now
+  defined as the augmented term set minus the terms it cannot afford
+  (`kprop_harmonic.factored_keeps_term`: non-hypertree top-slice diagrams,
+  e.g. covariance cycles, and products of the factored top-degree cumulant's
+  all-distinct block with other blocks). It is therefore NOT equivalent to
+  unfactored `kind=AUGMENT`; the dropped terms have the same Theta(n^-k_max)
+  squared size as the extra augmented terms that are kept. Tests compare it
+  against an unfactored reference restricted to the same term set.
+  **The paper needs updating** to reflect both the augmented Edgeworth cap
+  (equation (14) with K+1 instead of K for the augmented algorithm, contra
+  S.4.2's "all other parts remain the same") and that factorized-augmented
+  computes a different estimate than (unfactorized) augmented.

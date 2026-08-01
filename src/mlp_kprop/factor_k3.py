@@ -17,6 +17,7 @@ from mlp_kprop.wick import relu_wick_coef
 from mlp_kprop.kprop_harmonic import (
     multiply_wicks,
     get_all_terms_iso,
+    factored_keeps_term,
 )
 
 logger = logging.getLogger(__name__)
@@ -285,18 +286,19 @@ def factored_nonlin_kprop_k3(
     '''
     Nonlinear step of cumulant propagation for k_max=3, in O(n^3) time instead of O(n^4).
     K_in should be the output of linear_kprop (with non-identity metric and bias already applied).
+
+    ==========================================================================================
+    WARNING: with augment=True this is NOT equivalent to the unfactored nonlin_kprop!
+    The augmented Edgeworth term set includes diagrams with no O(n)-rank factorization
+    (e.g. the covariance triangle and kappa_3 x edge products), which this implementation
+    DROPS: it sums exactly the terms kept by kprop_harmonic.factored_keeps_term. Since the
+    dropped terms have the same Theta(n^-3) squared size as the extra terms that are kept,
+    factored-augment and unfactored-augment estimates differ at the leading order of their
+    (common-order) MSE. tests/test_factor_k3.py checks equivalence against an unfactored
+    reference restricted to the same term set.
+    ==========================================================================================
     '''
     assert not (base and augment), "base and augment modes are mutually exclusive"
-    if augment:
-        # The augmented Edgeworth term set (all diagrams of squared size Omega(n^{-k_max}),
-        # see get_vec_cond) includes diagrams with no O(n)-rank factorization, e.g. cycles
-        # of covariance blocks, so it cannot be reproduced within this representation's
-        # FLOP budget. TODO: Decide what factored-augmented should compute (e.g. only the
-        # factorable subset of the augmented diagrams) and reinstate it.
-        raise NotImplementedError(
-            "Factored nonlin_kprop does not support kind=AUGMENT with the augmented "
-            "Edgeworth truncation; use the unfactored nonlin_kprop instead."
-        )
     if not use_pK and not base:
         raise NotImplementedError("use_pK=False only implemented for base=True")
     WK = K_in
@@ -322,7 +324,7 @@ def factored_nonlin_kprop_k3(
     # 3.1 Compute pK slices that don't need to be factored
     # Note that this includes all the d=4 slices we need:
     # Since we only take the scalar ("pure radial") part, which forces the slice to be (2, 2) or a coarsening
-    terms_iso = get_all_terms_iso(k_max=3, d_max=3 if base else 4)
+    terms_iso = get_all_terms_iso(k_max=3, d_max=3 if base else 4, augment=augment)
     terms_iso = [
         (int_part, vec_part, count)
         for int_part, vec_part_dict in terms_iso.items()
@@ -332,6 +334,7 @@ def factored_nonlin_kprop_k3(
         and (augment or int_part not in  [(3, 1), (2, 1, 1)])   # Skip in simple mode bc no contribution to d=4, r=2
         and int_part != (1, 1, 1)   # Factor this manually
         and (int_part, set(vec_part)) != ((2, 1, 1), {(1, 1, 1,)}) # Mult wick coefs and carry over to K211_contrib manually
+        and factored_keeps_term(3, int_part, vec_part)  # Drop terms needing kappa_3's factored all-distinct block
     ]
     pK_slices = defaultdict(lambda: 0.0)
     for int_part, vec_part, count in tqdm(
@@ -358,12 +361,16 @@ def factored_nonlin_kprop_k3(
         pK_slices[int_part] = symmetrize(pK_slices[int_part], vec=int_part)
 
     # 3.2 Compute pK slices that do need to be factored: just (1, 1, 1)
-    # The only (1, 1, 1) diagrams within the vec_cond budget (sum of block costs
-    # <= k_max - 1 = 2) are the single kappa_3 block (1, 1, 1) [cost 2] and the
-    # two-leg (1, 1) + (1, 1) covariance diagrams [cost 1 + 1]. Blocks such as
-    # (2, 1), (2, 2), or (2, 1, 1) each cost >= 2, so they cannot appear here.
+    # In simple/base mode (budget k_max - 1 = 2) the only (1, 1, 1) diagrams are the
+    # single kappa_3 block [cost 2] and the light two-leg path (1, 1) + (1, 1)
+    # [cost 1 + 1]. Augment mode (budget 3) adds every *hypertree* diagram of cost 3:
+    # two-leg paths with one heavy leg (a kappa_3 (2, 1)-slice, kappa_4 (2, 2)-slice,
+    # or doubled kappa_2 edge) and the single kappa_4 (2, 1, 1)-slice block.
+    # (The non-hypertree cost-3 diagrams -- the covariance triangle and
+    # kappa_3 x edge products -- are dropped; see factored_keeps_term.)
     with flop_name('nonlin_sum 111 factored'):
         w = lambda k: get_wick_coef(k, 1)
+        budget = 2 + augment  # must match get_vec_cond(k_max=3, augment=augment)
         WK_11 = WK[2].core
         if use_pK:
             WK_11 = zero_repeated(WK_11)
@@ -376,12 +383,74 @@ def factored_nonlin_kprop_k3(
         else:
             pK_111 = FactoredTensor(n=n, d=3, device=mean.device, dtype=mean.dtype)
 
-        # 2 legs: edges (i, j) and (j, k), both (1, 1) blocks
-        # Split into 3 factors using A_{ij}B_{jk} = A_{ir}I_{jr}B^T_{kr}
-        fac1 = w(1)[:, None] * WK_11
+        # Two-leg path diagrams with edges (i, j) and (j, k), factored as
+        # A_{ij}B_{jk} = A_{ir}I_{jr}B^T_{kr}.
+        # Leg types are (near_mult, far_mult, slice / prod(mult!), block cost).
+        legs = [(1, 1, WK_11, 1)]
+        if augment:
+            if 3 in WK:
+                WK_21 = diagslice(WK[3], (2, 1), output_zero_repeated=use_pK) / 2
+                legs += [(2, 1, WK_21, 2), (1, 2, WK_21.T, 2)]
+            if 4 in WK:
+                assert isinstance(WK[4], HTensor)
+                WK_22 = diagslice(WK[4], (2, 2), output_zero_repeated=use_pK) / 4
+                legs.append((2, 2, WK_22, 2))
+            # Doubled light edge: two parallel (1, 1) kappa_2 blocks (1/2! for the repeated block)
+            legs.append((2, 2, WK_11 * WK_11 / 2, 2))
         fac2 = torch.eye(n) * 3  # 3 = number of 3 vertex 2 edge graphs
-        fac3 = (w(2)[:, None] * w(1)[None, :] * WK_11).T
-        pK_111.add_factors_((fac1, fac2, fac3))
+        for a_l, b_l, s_l, c_l in legs:
+            rights = [(a_r, b_r, s_r) for a_r, b_r, s_r, c_r in legs if c_l + c_r <= budget]
+            if not rights:
+                continue
+            fac1 = w(a_l)[:, None] * s_l
+            fac3 = sum(w(b_l + a_r)[:, None] * w(b_r)[None, :] * s_r for a_r, b_r, s_r in rights)
+            pK_111.add_factors_((fac1, fac2, fac3.T))
+
+        # 211 H(d=4,r=1) -> 111 (cost 3, so only within the augment budget)
+        if augment and 4 in WK:
+            # Three possibilities:
+            # 1. 2-block goes on core (sym_coef=1/6 of possible pairings)
+            #    w(2)_i core_{ii} w(1)_j w(1)_k metric_{jk} = sum_r w(2)_i core_{ii} w(1)_j metric_{jr} w(1)_k Id_{kr}
+            # 2. 2-block bridges core and metric  (sym_coef=4/6 of possible pairings)
+            #    w(1)_i w(2)_j w(1)_k core_{ij} metric_{jk} = sum_r w(1)_i core_{ir} w(2)_j Id_{jr} w(1)_k metric_{kr}
+            # 3. 2-block goes on metric  (sym_coef=1/6 of possible pairings)
+            #    w(1)_i w(1)_j w(2)_k core_{ij} metric_{kk} = sum_r w(1)_i core_{ir} w(1)_j Id_{jr} w(2)_k metric_{kk}
+            core = WK[4].core
+            metric = WK[4].metric
+            if metric.ndim == 1:
+                metric_full = metric.diagflat()   # n, n
+                metric_diag = metric              # n
+            elif metric.ndim == 2:
+                metric_full = metric              # n, n
+                metric_diag = metric.diagonal()   # n
+            else:
+                raise ValueError(f"metric must be 1d or 2d, got shape {metric.shape}")
+            ones = torch.ones_like(metric_diag)
+            I = torch.eye(n, device=mean.device, dtype=mean.dtype)
+
+            # 1
+            fac1 = w(2)[:, None] * core.diagonal()[:, None] * ones[None, :]
+            fac2 = w(1)[:, None] * metric_full
+            fac3 = w(1)[:, None] * I
+            fac3 /= 4 # vec_part_coef(((2, 1, 1),)) * |iso_class| * sym_coef = 1/2 * 3 * 1/6 = 1/4
+            pK_111.add_factors_((fac1, fac2, fac3))
+
+            # 2
+            if metric.ndim == 2:
+                # This term is zero when metric is diagonal
+                fac1 = w(1)[:, None] * core
+                fac2 = w(2)[:, None] * I
+                fac3 = w(1)[:, None] * metric_full
+                # vec_part_coef(((2, 1, 1),)) * |iso_class| * sym_coef = 1/2 * 3 * 4/6 = 1
+                # so no need to multiply
+                pK_111.add_factors_((fac1, fac2, fac3))
+
+            # 3
+            fac1 = w(1)[:, None] * core
+            fac2 = w(1)[:, None] * I
+            fac3 = w(2)[:, None] *  metric_diag[:, None] * ones[None, :]
+            fac3 /= 4 # vec_part_coef(((2, 1, 1),)) * |iso_class| * sym_coef = 1/2 * 3 * 1/6 = 1/4
+            pK_111.add_factors_((fac1, fac2, fac3))
 
     # If not use_pK, pK_slices already contain our cumulant estimate. Project to harmonic and return.
     if not use_pK:

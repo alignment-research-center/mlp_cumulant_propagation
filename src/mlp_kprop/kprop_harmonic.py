@@ -1,6 +1,6 @@
 import logging
 import math
-from collections import OrderedDict, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Callable, Iterable
 from functools import partial
 from typing import Optional
@@ -62,6 +62,43 @@ def get_vec_cond(k_max: int, augment: bool = False):
         return sum(vec_block_cost(v) for v in vec_part) <= budget
 
     return VecPartCond(part_cond=vec_cond)
+
+
+@cache
+def is_hypertree(vec_part: VecPartition) -> bool:
+    """
+    Whether the diagram's blocks form a hypertree (Berge-acyclic hypergraph) after
+    merging parallel 2-support blocks into a single effective edge: pairwise support
+    overlaps of at most one group, and sum(|support| - 1) == #groups - 1.
+    Exactly these diagrams admit an O(n)-rank factored evaluation (see factor_k3/factor_k4);
+    e.g. covariance triangles and kappa_top x edge products do not.
+    """
+    counts = Counter(frozenset(i for i, x in enumerate(v) if x) for v in vec_part)
+    if any(c > 1 and len(s) != 2 for s, c in counts.items()):
+        return False
+    edges = list(counts)
+    if any(len(a & b) >= 2 for i, a in enumerate(edges) for b in edges[i + 1 :]):
+        return False
+    verts = set().union(*edges) if edges else set()
+    return sum(len(e) - 1 for e in edges) == max(len(verts) - 1, 0)
+
+
+def factored_keeps_term(k_max: int, int_part: IntPartition, vec_part: VecPartition) -> bool:
+    """
+    Which terms the factored implementations (factor_k3/factor_k4) include.
+    In augment mode this is a strict subset of the full term set: factored kind=AUGMENT
+    drops the terms it cannot afford, namely
+      - non-hypertree diagrams for the top slice int_part == (1,)*k_max, whose output
+        must be produced in O(n)-rank factored form; and
+      - diagrams that pointwise-multiply the all-distinct block (1,)*k_max of the
+        degree-k_max cumulant with other blocks, since that input only exists in
+        factored form (materializing it costs O(n^k_max * rank)).
+    All other terms are evaluated densely within the factored FLOP budget.
+    In simple/base mode this keeps everything (the paper-basic term set is all-hypertree).
+    """
+    if int_part == (1,) * k_max:
+        return is_hypertree(vec_part)
+    return len(vec_part) == 1 or (1,) * k_max not in vec_part
 
 
 # TODO: Move somewhere else and rename to something more informative.
@@ -292,8 +329,11 @@ def nonlin_kprop(
             - See get_r_x for how k_max determines which pieces of the harmonic decomposition we track.
         nonlin_wick_coef: 1d Wick coefficients wrt a Gaussian. (mean, var, k, p) -> E_{Z~N(mean,var)}[∂^k nonlin(Z)^p]
         factor: Use a factorized representation for the top-degree cumulant.
-            Only supported for k_max=3 or 4, and not for kind=AUGMENT (whose diagram
-            set includes terms with no O(n)-rank factorization).
+            Only supported for k_max=3 or 4.
+            WARNING: with kind=AUGMENT, factor=True is NOT equivalent to factor=False:
+            the factored algorithm drops the augmented diagrams it cannot afford
+            (see factored_keeps_term), which have the same Theta(n^-k_max) squared
+            size as the augmented diagrams it keeps.
 
     Returns:
         K_out: Output cumulants (with identity metric)
@@ -479,7 +519,9 @@ def mlp_kprop(
         use_avg_metric: whether to use the average-case metric E[WW^T] instead of WW^T
             Empirically, this doesn't have a large effect on MSE or FLOPs.
         factor: Use a factorized representation for the top-degree cumulant to cut a factor of n in FLOPs.
-            Only supported for k_max=3 or 4, and not for kind=AUGMENT.
+            Only supported for k_max=3 or 4.
+            WARNING: factor=True with kind=AUGMENT drops the augmented diagrams that
+            do not factor, so it is NOT equivalent to factor=False (see factored_keeps_term).
         use_pK: Whether to use pK_to_K logic in nonlinear expansion instead of directly computing K.
             (use_pK=False is only for ablation studies; it doesn't get good MSE.)
         up_to_layer: Output cumulants up to and including this layer.
