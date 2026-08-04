@@ -17,6 +17,14 @@
   is unaffected; test goldens have already been refreshed via
   `scripts/refresh_goldens.py`.)
 
+- The kprop metric-skip change (`metric_needed` in `kprop_harmonic.py`) removes
+  the per-layer `W @ metric @ W^T` updates for `kind=SIMPLE` with even `k_max`
+  and `kind=BASE` (pK_ablate). Outputs are bit-identical, but **FLOP counts and
+  wall-clock times for those combos are stale at every `k_max`, including
+  `k_max = 1` for `kind=BASE`** (on top of the truncation staleness above):
+  drop the affected `data/flop_poly_cache` / `data/kprop_time_cache` entries
+  before refreshing figures, so they refit against the new code.
+
 - Factored (factorized) cumulant propagation with `kind=AUGMENT` is now
   defined as the augmented term set minus the terms it cannot afford
   (`kprop_harmonic.factored_keeps_term`: non-hypertree top-slice diagrams,

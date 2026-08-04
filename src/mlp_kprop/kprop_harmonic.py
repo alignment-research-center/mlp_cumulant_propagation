@@ -244,6 +244,21 @@ def get_d_max(k_max, kind: Kind) -> int:
         # Maximum possible degree of diagslice satisfying ceil(alpha/2) int_cond is 2*k_max
         return 2 * k_max
 
+def metric_needed(k_max: int, kind: Kind = SIMPLE) -> bool:
+    '''
+    Whether the HTensor metric is ever consumed for this (k_max, kind).
+
+    The metric only enters through radial (r > 0) pieces: harmonic_diagslice and
+    HTensor.to_tensor expand metric factors for r > 0 but reduce to the plain core
+    when r == 0, and the factored k3/k4 paths read metrics of radial pieces only.
+    So when no tracked degree has r_x > 0 (e.g. SIMPLE with even k_max, or BASE),
+    the W @ metric @ W^T updates in the linear step are dead weight and can be
+    skipped by setting an identity metric.
+    '''
+    d_max = get_d_max(k_max, kind)
+    return any(get_r_x(d, k_max, kind=kind) > 0 for d in range(1, d_max + 1))
+
+
 def _coerce_layer_bias(
     bias: Optional[Float[Tensor, "out_dim"]],
     *,
@@ -540,6 +555,10 @@ def mlp_kprop(
     nonlin_wick_coef_by_layer = [WICK_COEF_D[nonlin] for nonlin in nonlin_by_layer]
     init_scale_by_layer = mlp.init_scale
 
+    # When no tracked piece is radial, the metric is never consumed, so skip the
+    # W @ metric @ W^T updates by pinning an identity metric.
+    skip_metric = not metric_needed(k_max, kind)
+
     K = coerce_input(K_in, k_max=k_max, kind=kind)
     K_by_layer = OrderedDict()
     for l, W_module in enumerate(mlp.Ws):
@@ -547,12 +566,21 @@ def mlp_kprop(
         layer_bias = W_module.bias
         if up_to_layer == f'pre{l}' or (l == len(mlp.nonlins) and up_to_layer is None):
             # Output preactivation (just linear_kprop, no projection needed).
-            K = linear_kprop(K, W, k_max=k_max, d_max=output_d_max, bias=layer_bias)
+            K = linear_kprop(
+                K, W, k_max=k_max, d_max=output_d_max,
+                set_metric=1.0 if skip_metric else None,
+                bias=layer_bias,
+            )
             if output_all:
                 K_by_layer[f"pre{l}"] = clone_tower(K, d_max=output_d_max)
             break
         if l < len(mlp.nonlins):
-            metric = init_scale_by_layer[l] if use_avg_metric else None
+            if use_avg_metric:
+                metric = init_scale_by_layer[l]
+            elif skip_metric:
+                metric = 1.0
+            else:
+                metric = None
             K = linear_kprop(
                 K, W, k_max=k_max,
                 set_metric=metric,
