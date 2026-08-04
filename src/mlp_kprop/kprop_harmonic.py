@@ -1,6 +1,6 @@
 import logging
 import math
-from collections import OrderedDict, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Callable, Iterable
 from functools import partial
 from typing import Optional
@@ -39,15 +39,66 @@ def get_int_cond(k_max: int):
     return IntPartCond(part_cond=int_cond)
 
 
+def vec_block_cost(v: Vec) -> int:
+    """
+    Power-counting cost of a cumulant block in the nonlinear-step diagram summation:
+    per entry, |kappa_v| = O(n^{-cost/2}) since E[kappa_v^2] = O(n^{2-sum(v)}) when v is
+    even and O(n^{1-sum(v)}) otherwise.
+    """
+    return sum(v) - 1 - all(x % 2 == 0 for x in v)
+
+
 @cache
-def get_vec_cond(k_max: int):
+def get_vec_cond(k_max: int, augment: bool = False):
+    # Include exactly the diagrams with k(nu) := 1 + sum_v cost(v) <= k_max
+    # (equation (14) of the paper); dropped diagrams have squared size O(n^{-k_max}).
+    # The augmented algorithm raises the cap by one, summing every diagram of squared
+    # size Omega(n^{-k_max}), i.e. every diagram contributing at leading order to the
+    # basic algorithm's MSE. This keeps the whole nonlinear step time-subleading
+    # (O(n^{k_max}) vs the linear step's O(n^{k_max+1})) when unfactorized.
+    budget = k_max - 1 + augment
+
     def vec_cond(vec_part: VecPartition) -> bool:
-        return (
-            sum(max(sum(math.ceil(v[i] / 2) for i in range(len(v))) - 1, 1) for v in vec_part)
-            <= k_max - 1
-        )
+        return sum(vec_block_cost(v) for v in vec_part) <= budget
 
     return VecPartCond(part_cond=vec_cond)
+
+
+@cache
+def is_hypertree(vec_part: VecPartition) -> bool:
+    """
+    Whether the diagram's blocks form a hypertree (Berge-acyclic hypergraph) after
+    merging parallel 2-support blocks into a single effective edge: pairwise support
+    overlaps of at most one group, and sum(|support| - 1) == #groups - 1.
+    Exactly these diagrams admit an O(n)-rank factored evaluation (see factor_k3/factor_k4);
+    e.g. covariance triangles and kappa_top x edge products do not.
+    """
+    counts = Counter(frozenset(i for i, x in enumerate(v) if x) for v in vec_part)
+    if any(c > 1 and len(s) != 2 for s, c in counts.items()):
+        return False
+    edges = list(counts)
+    if any(len(a & b) >= 2 for i, a in enumerate(edges) for b in edges[i + 1 :]):
+        return False
+    verts = set().union(*edges) if edges else set()
+    return sum(len(e) - 1 for e in edges) == max(len(verts) - 1, 0)
+
+
+def factored_keeps_term(k_max: int, int_part: IntPartition, vec_part: VecPartition) -> bool:
+    """
+    Which terms the factored implementations (factor_k3/factor_k4) include.
+    In augment mode this is a strict subset of the full term set: factored kind=AUGMENT
+    drops the terms it cannot afford, namely
+      - non-hypertree diagrams for the top slice int_part == (1,)*k_max, whose output
+        must be produced in O(n)-rank factored form; and
+      - diagrams that pointwise-multiply the all-distinct block (1,)*k_max of the
+        degree-k_max cumulant with other blocks, since that input only exists in
+        factored form (materializing it costs O(n^k_max * rank)).
+    All other terms are evaluated densely within the factored FLOP budget.
+    In simple/base mode this keeps everything (the paper-basic term set is all-hypertree).
+    """
+    if int_part == (1,) * k_max:
+        return is_hypertree(vec_part)
+    return len(vec_part) == 1 or (1,) * k_max not in vec_part
 
 
 # TODO: Move somewhere else and rename to something more informative.
@@ -56,9 +107,10 @@ def get_all_terms(
     k_max: int,
     d_max: Optional[int] = None,
     use_mean_var: bool = False,
+    augment: bool = False,
 ) -> Iterable[tuple[IntPartition, VecPartition]]:
     int_cond = get_int_cond(k_max)
-    vec_cond = get_vec_cond(k_max)
+    vec_cond = get_vec_cond(k_max, augment=augment)
     logger.debug("Enumerating all partitions and diagrams...")
     mix_cond = (
         (lambda vpart: is_mixed(vpart, m=1))
@@ -75,7 +127,10 @@ def get_all_terms(
         pbar.set_postfix({"int_part": int_part})
         for vec_part in vec_cond.get_parts(
             dim=len(int_part),
-            sum_max=4 * (k_max - 1),
+            # Admissible blocks satisfy sum(v) <= 2 * vec_block_cost(v), so vec_cond
+            # already implies |k| <= 2 * budget. (For the basic algorithm this sits
+            # within the |k| <= 2*k_max - 1 cap of equation (13) of the paper.)
+            sum_max=2 * (k_max - 1 + augment),
         ):
             if (
                 mix_cond(vec_part)
@@ -93,8 +148,9 @@ def get_all_terms_iso(
     k_max: int,
     d_max: Optional[int] = None,
     use_mean_var: bool = False,
+    augment: bool = False,
 ) -> dict[IntPartition, dict[VecPartition, int]]:
-    terms = get_all_terms(k_max, d_max=d_max, use_mean_var=use_mean_var)
+    terms = get_all_terms(k_max, d_max=d_max, use_mean_var=use_mean_var, augment=augment)
     ret = {}
     for int_part in set(t[0] for t in terms):
         vec_parts = [t[1] for t in terms if t[0] == int_part]
@@ -274,6 +330,10 @@ def nonlin_kprop(
         nonlin_wick_coef: 1d Wick coefficients wrt a Gaussian. (mean, var, k, p) -> E_{Z~N(mean,var)}[∂^k nonlin(Z)^p]
         factor: Use a factorized representation for the top-degree cumulant.
             Only supported for k_max=3 or 4.
+            WARNING: with kind=AUGMENT, factor=True is NOT equivalent to factor=False:
+            the factored algorithm drops the augmented diagrams it cannot afford
+            (see factored_keeps_term), which have the same Theta(n^-k_max) squared
+            size as the augmented diagrams it keeps.
 
     Returns:
         K_out: Output cumulants (with identity metric)
@@ -334,7 +394,7 @@ def nonlin_kprop(
         return nonlin_wick_coef(mean=mean, var=var, k=k, p=p)
 
     # 2. Compute pK
-    terms_iso = get_all_terms_iso(k_max, d_max=get_d_max(k_max, kind))
+    terms_iso = get_all_terms_iso(k_max, d_max=get_d_max(k_max, kind), augment=(kind == AUGMENT))
     terms_iso = [
         (int_part, vec_part, count)
         for int_part, vec_part_dict in terms_iso.items()
@@ -451,12 +511,17 @@ def mlp_kprop(
         kind: determines which cumulants to track based on k_max
             - SIMPLE: fewest pieces in harmonic decomposition to get O(n^{-k_max}) error.
             - AUGMENT: as many pieces as possible in harmonic decomposition while getting O(n^{k_max+1}) FLOPs (unfactorized).
+                Also sums every Edgeworth diagram of squared size Omega(n^{-k_max})
+                in the nonlinear step (see get_vec_cond), rather than just those of
+                squared size Omega(n^{-k_max+1}).
             - BASE: Only cumulants up to k_max. (Doesn't get good MSE; just for ablation studies.)
             See get_r_x for details.
         use_avg_metric: whether to use the average-case metric E[WW^T] instead of WW^T
             Empirically, this doesn't have a large effect on MSE or FLOPs.
         factor: Use a factorized representation for the top-degree cumulant to cut a factor of n in FLOPs.
             Only supported for k_max=3 or 4.
+            WARNING: factor=True with kind=AUGMENT drops the augmented diagrams that
+            do not factor, so it is NOT equivalent to factor=False (see factored_keeps_term).
         use_pK: Whether to use pK_to_K logic in nonlinear expansion instead of directly computing K.
             (use_pK=False is only for ablation studies; it doesn't get good MSE.)
         up_to_layer: Output cumulants up to and including this layer.

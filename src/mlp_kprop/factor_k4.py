@@ -19,6 +19,8 @@ from mlp_kprop.wick import relu_wick_coef
 from mlp_kprop.kprop_harmonic import (
     multiply_wicks,
     get_all_terms_iso,
+    vec_block_cost,
+    factored_keeps_term,
 )
 
 logger = logging.getLogger(__name__)
@@ -327,6 +329,17 @@ def factored_nonlin_kprop_k4(
     '''
     Nonlinear step of cumulant propagation for k_max=4.
     K_in should be the output of linear_kprop (with non-identity metric and bias already applied).
+
+    ==========================================================================================
+    WARNING: with augment=True this is NOT equivalent to the unfactored nonlin_kprop!
+    The augmented Edgeworth term set includes diagrams with no O(n)-rank factorization
+    (e.g. covariance 4-cycles and kappa_4 x edge products), which this implementation
+    DROPS: it sums exactly the terms kept by kprop_harmonic.factored_keeps_term. Since the
+    dropped terms have the same Theta(n^-4) squared size as the extra terms that are kept,
+    factored-augment and unfactored-augment estimates differ at the leading order of their
+    (common-order) MSE. tests/test_factor_k4.py checks equivalence against an unfactored
+    reference restricted to the same term set.
+    ==========================================================================================
     '''
     assert not (base and augment), "base and augment modes are mutually exclusive"
     if not use_pK and not base:
@@ -351,7 +364,7 @@ def factored_nonlin_kprop_k4(
     pK_slices = defaultdict(lambda: 0.)
 
     # 3.1 Compute pK slices that don't need to be factored
-    terms_iso = get_all_terms_iso(k_max=4, d_max=6 if augment else 4)
+    terms_iso = get_all_terms_iso(k_max=4, d_max=6 if augment else 4, augment=augment)
     terms_iso = [
         (int_part, vec_part, count)
         for int_part, vec_part_dict in terms_iso.items()
@@ -362,6 +375,7 @@ def factored_nonlin_kprop_k4(
         and int_part != (1, 1, 1, 1)   # Factor this manually
         and (int_part, set(vec_part)) != ((2, 1, 1, 1), {(1, 1, 1, 1,)})   # Mult wick coefs and carry over to K2111_contrib manually
         and int_part != (2, 2, 1, 1)   # Contribution to H(d=6,r=3) is zero bc of distinct indices (output metric is always identity!)
+        and factored_keeps_term(4, int_part, vec_part)  # Drop terms needing kappa_4's factored all-distinct block
     ]
     pK_slices = defaultdict(lambda: 0.0)
     for int_part, vec_part, count in tqdm(
@@ -385,14 +399,6 @@ def factored_nonlin_kprop_k4(
     # So we symmetrize here
     for int_part in pK_slices:
         pK_slices[int_part] = symmetrize(pK_slices[int_part], vec=int_part)
-
-    # The (1,1,1,1) factored section below only accesses <=3-block dslices,
-    # so 4-dslices are no longer needed.
-    # import pdb; pdb.set_trace()
-    if 5 in WK:
-        WK[5].repeated.slices.pop((2, 1, 1, 1), None)
-    if 6 in WK:
-        WK[6].repeated.slices.pop((2, 2, 1, 1), None)
 
     # 3.2 Compute pK slices that do need to be factored: just (1, 1, 1, 1)
     def dsWK(*part: IntPartition) -> Float[Tensor, "*n"]:
@@ -435,62 +441,72 @@ def factored_nonlin_kprop_k4(
         # and group by the incidence of the edge with that vertex (by convention, vertex j)
         # Each B factor is the sum over the three possible graphs (up to permutation): path, star, 3+2
         # Keep new factors separate to avoid taking dslices of old factors repeatedly
-        tmp = torch.empty((n, n, n), device=mean.device, dtype=mean.dtype)
-        for A_j_inc in (1, 2):
-            A_term = None
-            dsA1 = dsWK(1, A_j_inc)
-            if dsA1 is not None:
-                A_term = dsA1 * w(1)[:, None]
-            dsA2 = dsWK(2, A_j_inc)
-            if dsA2 is not None:
-                if A_term is None:
-                    A_term = dsA2 * w(2)[:, None]
-                else:
-                    A_term = A_term + dsA2 * w(2)[:, None]
-            if A_term is None:
+        # Diagrams are subject to the same budget as get_vec_cond(k_max=4, augment=augment):
+        # the block costs must sum to at most k_max - 1 = 3 (4 in augment mode). Only
+        # hypertree diagrams are representable here; see the WARNING in the docstring.
+        budget = 4 - 1 + augment
+        # 2-ary legs: (near_inc, far_inc, slice, cost). dsWK slices include 1/prod(mult!).
+        two_legs = []
+        for a, b in product((1, 2), repeat=2):
+            if vec_block_cost((a, b)) > budget - 2:
+                # Every graph needs at least two more cost-1 legs or one cost-2 3-block
                 continue
-            A = _einsum_delta(A_term, 'i j -> i j j')
+            s = dsWK(a, b)
+            if s is not None:
+                two_legs.append((a, b, s, vec_block_cost((a, b))))
+        ds11 = dsWK(1, 1)
+        if budget >= 4 and ds11 is not None:
+            # Doubled light edge: two parallel (1, 1) kappa_2 blocks (1/2! for the repeated block)
+            two_legs.append((2, 2, ds11 * ds11 / 2, 2))
+        # 3-ary legs for the 3+2 graphs
+        three_legs = []
+        for a, b, c in product((1, 2), repeat=3):
+            if vec_block_cost((a, b, c)) > budget - 1:
+                continue
+            s = dsWK(a, b, c)
+            if s is not None:
+                three_legs.append((a, b, c, s, vec_block_cost((a, b, c))))
+        tmp = torch.empty((n, n, n), device=mean.device, dtype=mean.dtype)
+        for A_i_inc, A_j_inc, A_s, A_cost in two_legs:
+            A_budget = budget - A_cost
+            if A_budget < 2:
+                # The cheapest continuation (two (1, 1) legs, or one (1, 1, 1) block) costs 2
+                continue
+            A = _einsum_delta(A_s * w(A_i_inc)[:, None], 'i j -> i j j')
             B = torch.zeros((n, n, n), device=mean.device, dtype=mean.dtype)
             B_jkl = B.permute(2, 0, 1)
             # Path with edges A(i, j), X(j, k), Y(k, l)
-            for X_j_inc, X_k_inc, Y_k_inc, Y_l_inc in product((1, 2), repeat=4):
-                X_jk = dsWK(X_j_inc, X_k_inc)
-                if X_jk is None:
-                    continue
-                Y_kl = dsWK(Y_k_inc, Y_l_inc)
-                if Y_kl is None:
-                    continue
-                torch.mul(X_jk[:, :, None], Y_kl[None, :, :], out=tmp)
-                tmp.mul_(w(A_j_inc + X_j_inc)[:, None, None])
-                tmp.mul_(w(X_k_inc + Y_k_inc)[None, :, None])
-                tmp.mul_(w(Y_l_inc)[None, None, :])
-                B_jkl.add_(tmp, alpha=12)  # number of path graphs
+            for X_j_inc, X_k_inc, X_s, X_cost in two_legs:
+                for Y_k_inc, Y_l_inc, Y_s, Y_cost in two_legs:
+                    if X_cost + Y_cost > A_budget:
+                        continue
+                    torch.mul(X_s[:, :, None], Y_s[None, :, :], out=tmp)
+                    tmp.mul_(w(A_j_inc + X_j_inc)[:, None, None])
+                    tmp.mul_(w(X_k_inc + Y_k_inc)[None, :, None])
+                    tmp.mul_(w(Y_l_inc)[None, None, :])
+                    B_jkl.add_(tmp, alpha=12)  # number of path graphs
             # Star with edges A(i, j), X(j, k), Y(j, l)
-            for X_j_inc, X_k_inc, Y_j_inc, Y_l_inc in product((1, 2), repeat=4):
-                X_jk = dsWK(X_j_inc, X_k_inc)
-                if X_jk is None:
-                    continue
-                Y_jl = dsWK(Y_j_inc, Y_l_inc)
-                if Y_jl is None:
-                    continue
-                torch.mul(X_jk[:, :, None], Y_jl[:, None, :], out=tmp)
-                tmp.mul_(w(A_j_inc + X_j_inc + Y_j_inc)[:, None, None])
-                tmp.mul_(w(X_k_inc)[None, :, None])
-                tmp.mul_(w(Y_l_inc)[None, None, :])
-                B_jkl.add_(tmp, alpha=4)  # number of star graphs
+            for X_j_inc, X_k_inc, X_s, X_cost in two_legs:
+                for Y_j_inc, Y_l_inc, Y_s, Y_cost in two_legs:
+                    if X_cost + Y_cost > A_budget:
+                        continue
+                    torch.mul(X_s[:, :, None], Y_s[:, None, :], out=tmp)
+                    tmp.mul_(w(A_j_inc + X_j_inc + Y_j_inc)[:, None, None])
+                    tmp.mul_(w(X_k_inc)[None, :, None])
+                    tmp.mul_(w(Y_l_inc)[None, None, :])
+                    B_jkl.add_(tmp, alpha=4)  # number of star graphs
             # 3+2 with edges A(i, j), B(j, k, l)
-            for B_j_inc, B_k_inc, B_l_inc in product((1, 2), repeat=3):
-                B_jkl_term = dsWK(B_j_inc, B_k_inc, B_l_inc)
-                if B_jkl_term is None:
+            for B_j_inc, B_k_inc, B_l_inc, B_s, B_cost in three_legs:
+                if B_cost > A_budget:
                     continue
-                tmp.copy_(B_jkl_term)
+                tmp.copy_(B_s)
                 tmp.mul_(w(A_j_inc + B_j_inc)[:, None, None])
                 tmp.mul_(w(B_k_inc)[None, :, None])
                 tmp.mul_(w(B_l_inc)[None, None, :])
                 B_jkl.add_(tmp, alpha=12)  # number of 3+2 graphs
             pK_1111.add_factors_((A, B))
 
-        # WK2111 -> pK1111
+        # WK2111 -> pK1111 (cost 4, so only within the augment budget)
         if augment and 5 in WK:
             assert WK[5].r == 1
             core = WK[5].core
@@ -528,46 +544,9 @@ def factored_nonlin_kprop_k4(
 
             if metric.ndim == 2:
                 #1
-                A = zero_repeated(diagslice(core, (2, 1)))[:,:,None] * w(2)[:,None,None] * w(1)[None,:,None] 
+                A = zero_repeated(diagslice(core, (2, 1)))[:,:,None] * w(2)[:,None,None] * w(1)[None,:,None]
                 B = metric_full[:, :, None] * 6/10 * w(1)[:, None, None] * w(1)[None, :, None]
                 pK_1111.add_factors_((A, B))
-
-        # WK2211 -> pK1111
-        # This is zero unless metric is nondiagonal
-        if augment and 6 in WK and WK[6].metric.ndim == 2:
-            assert WK[6].r == 3
-            core = WK[6].core
-            metric = WK[6].metric
-            I = torch.eye(n, device=mean.device, dtype=mean.dtype)
-
-            # Four possibilities out of 45 total ways to assign two 2-blocks to (metric)^{otimes 3}
-            # 1. Each 2-block goes on a metric (sym_coef=3/45)
-            #    metric_{ii} metric_{jj} metric_{kl}    (already factored)
-            # 2. Both 2-blocks bridge the same pair of metrics   (sym_coef=6/45)
-            #    metric_{ij} metric_{ij} metric_{kl}    (already factored)
-            # 3. One 2-block goes on a metric; the other bridges two other metrics   (sym_coef=12/45)
-            #    metric_{ii} metric_{jk} metric_{kl} = sum_r (metric_{ii} metric_{jr}) (metric_{kl} I_{kr})
-            # 4. Each 2-block bridges a different pair of metrics   (sym_coef=24/45)
-            #    metric_{ij} metric_{jk} metric_{kl} = sum_r (metric_{ij} metric_{jr}) (metric_{kl} I_{kr})
-            # Note (1, 2) and (3, 4) can each be combined.
-            # Then everything is multiplied by 
-            #   terms_iso[(1,1,1,1)][((2,2,1,1),)] *  vec_part_coef(((2,2,1,1),), divide_fac=True) = 6 * 1/4 = 3/2
-            metric_diag = metric.diagonal()
-            metric_full = metric
-
-            # 1 and 2
-            A = w(2)[:,None,None] * w(2)[None,:,None] * (
-                metric_diag[:,None,None] * metric_diag[None,:,None] * (3/45) +
-                metric_full[:,:,None] * metric_full[:,:,None] * (6/45)
-            )
-            B = w(1)[:,None,None] * w(1)[None,:,None] * metric_full[:,:,None] * (core * 3/2)
-            pK_1111.add_factors_((A, B))
-            
-            # 3 and 4
-            A = w(2)[:,None,None] * w(1)[None,:,None] * metric_diag[:,None,None] * metric_full[None,:,:] * (12/45) +\
-                w(1)[:,None,None] * w(2)[None,:,None] * metric_full[:,:,None] * metric_full[None,:,:] * (24/45)
-            B = w(2)[:,None,None] * w(1)[None,:,None] * metric_full[:,:,None] * I[:,None,:] * (core * 3/2)
-            pK_1111.add_factors_((A, B))
 
     # If not use_pK, pK_slices already contain our cumulant estimate. Project to harmonic and return.
     if not use_pK:
